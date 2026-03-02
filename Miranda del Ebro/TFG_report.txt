@@ -1,0 +1,20 @@
+TFG - Predicción temprana de desbordamiento (Miranda del Ebro)
+
+Dataset: Miranda_del_Ebro.csv
+Filas (post-features): 2206 | Features: 35
+Split temporal: train < 2024-01-01 | test >= 2024-01-01
+
+Objetivo principal (ML): y_riesgo_7d  | Positivos train=16 test=7
+PR-AUC (Average Precision) en test: 0.0373
+Métricas por umbral (test):
+  thr=0.5  prec=0.040  rec=0.143  f1=0.062  alerts=25  cm={'tn': 731, 'fp': 24, 'fn': 6, 'tp': 1}
+  thr=0.3  prec=0.024  rec=0.143  f1=0.041  alerts=42  cm={'tn': 714, 'fp': 41, 'fn': 6, 'tp': 1}
+  thr=0.2  prec=0.016  rec=0.143  f1=0.029  alerts=63  cm={'tn': 693, 'fp': 62, 'fn': 6, 'tp': 1}
+  thr=0.1  prec=0.010  rec=0.143  f1=0.019  alerts=101  cm={'tn': 655, 'fp': 100, 'fn': 6, 'tp': 1}
+
+Baseline (reglas) para y_riesgo_1d (alerta a 24h) en test:
+  prec=0.077  rec=1.000  alerts=13  positivos=1  (tp=1, fp=12, fn=0)
+
+Sugerencia práctica:
+- Empieza con thr=0.2 o 0.3 y añade histéresis: alertar si p>thr en 2 ejecuciones seguidas.
+- Luego ajusta thr buscando el equilibrio entre 'no perder crecidas' (recall alto) y falsas alarmas.

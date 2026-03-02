@@ -1,0 +1,238 @@
+<!doctype html>
+<html lang="es">
+<head>
+  <meta charset="utf-8"/>
+  <meta name="viewport" content="width=device-width, initial-scale=1"/>
+  <title>TFG Río Ebro – Miranda (Tiempo real)</title>
+  <style>
+    body { font-family: Arial, sans-serif; margin: 24px; background: #fafafa; }
+    h1 { margin: 0 0 6px 0; }
+    .muted { color: #666; margin-bottom: 16px; }
+
+    .grid { display: grid; grid-template-columns: 1fr; gap: 14px; max-width: 980px; }
+    @media (min-width: 900px) {
+      .grid { grid-template-columns: 1.2fr 0.8fr; }
+    }
+
+    .card {
+      background: #fff;
+      border: 1px solid #e6e6e6;
+      border-radius: 12px;
+      padding: 16px;
+      box-shadow: 0 1px 2px rgba(0,0,0,0.04);
+    }
+
+    .row { display: flex; gap: 14px; flex-wrap: wrap; align-items: center; }
+    .pill {
+      display: inline-flex;
+      align-items: center;
+      gap: 8px;
+      padding: 6px 10px;
+      border-radius: 999px;
+      border: 1px solid #e6e6e6;
+      background: #fff;
+      font-size: 13px;
+    }
+
+    .big { font-size: 34px; font-weight: 800; line-height: 1.0; }
+    .label { color: #666; font-size: 13px; margin-bottom: 6px; }
+    .kpi { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; margin-top: 12px; }
+
+    button {
+      cursor: pointer;
+      border: 1px solid #e1e1e1;
+      background: #fff;
+      border-radius: 10px;
+      padding: 10px 12px;
+      font-weight: 700;
+    }
+    button:hover { background: #f3f3f3; }
+
+    table { width: 100%; border-collapse: collapse; margin-top: 10px; font-size: 14px; }
+    th, td { border-bottom: 1px solid #eee; padding: 10px 8px; text-align: left; }
+    th { font-size: 12px; color: #666; text-transform: uppercase; letter-spacing: 0.04em; }
+    .mono { font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace; }
+
+    .dot {
+      width: 10px; height: 10px; border-radius: 50%;
+      display: inline-block;
+      background: #999;
+    }
+    .dot.ok { background: #0a7a2f; }
+    .dot.warn { background: #b85c00; }
+    .dot.bad { background: #b00020; }
+  </style>
+</head>
+<body>
+  <h1>Dashboard Río Ebro – Miranda de Ebro</h1>
+  <div class="muted">Tiempo real desde SAIH Open Data (actualización automática por WebSocket).</div>
+
+  <div class="grid">
+    <!-- Panel principal -->
+    <div class="card">
+      <div class="row" style="justify-content: space-between;">
+        <div class="row">
+          <span class="pill"><span class="dot" id="connDot"></span> <span id="connText">Desconectado</span></span>
+          <span class="pill">Fuente: <span id="source" class="mono">-</span></span>
+
+          <!-- NUEVO: diferencia entre dato y refresco -->
+          <span class="pill">Última medida (SAIH): <span id="ts" class="mono">-</span></span>
+          <span class="pill">Refresco servidor: <span id="ref" class="mono">-</span></span>
+          <span class="pill">Dato nuevo: <span id="isNew" class="mono">-</span></span>
+        </div>
+
+        <div class="row">
+          <button id="btnDemo">Simular dato (demo)</button>
+        </div>
+      </div>
+
+      <div class="kpi">
+        <div>
+          <div class="label">Nivel (m)</div>
+          <div class="big"><span id="nivel">-</span></div>
+          <div class="muted">Tendencia: <span id="tn" class="mono">-</span></div>
+        </div>
+        <div>
+          <div class="label">Caudal (m³/s)</div>
+          <div class="big"><span id="caudal">-</span></div>
+          <div class="muted">Tendencia: <span id="tc" class="mono">-</span></div>
+        </div>
+      </div>
+
+      <div style="margin-top: 10px;">
+        <div class="label">Estado (visual)</div>
+        <div id="estado" class="pill"><span class="dot" id="estadoDot"></span> <span id="estadoTxt">-</span></div>
+        <div class="muted" style="margin-top:8px; font-size: 12px;">
+          * Este estado es solo visual (umbral simple). La lógica real de alertas/predicción la añadimos después.
+        </div>
+      </div>
+    </div>
+
+    <!-- Panel lateral -->
+    <div class="card">
+      <div class="label">Últimos mensajes (solo cuando hay dato nuevo)</div>
+      <table>
+        <thead>
+          <tr>
+            <th>Hora (dato)</th>
+            <th>Nivel</th>
+            <th>Caudal</th>
+            <th>Src</th>
+          </tr>
+        </thead>
+        <tbody id="log"></tbody>
+      </table>
+    </div>
+  </div>
+
+<script>
+  const connDot = document.getElementById("connDot");
+  const connText = document.getElementById("connText");
+
+  const sourceEl = document.getElementById("source");
+  const tsEl = document.getElementById("ts");
+  const refEl = document.getElementById("ref");
+  const isNewEl = document.getElementById("isNew");
+
+  const nivelEl = document.getElementById("nivel");
+  const caudalEl = document.getElementById("caudal");
+  const tnEl = document.getElementById("tn");
+  const tcEl = document.getElementById("tc");
+
+  const estadoEl = document.getElementById("estadoTxt");
+  const estadoDot = document.getElementById("estadoDot");
+
+  const logEl = document.getElementById("log");
+  const btnDemo = document.getElementById("btnDemo");
+
+  // Umbrales SOLO VISUALES
+  const NIVEL_WARN = 2.0;
+  const NIVEL_BAD  = 3.0;
+
+  function setConn(isUp) {
+    connDot.className = "dot " + (isUp ? "ok" : "");
+    connText.textContent = isUp ? "Conectado" : "Desconectado";
+  }
+
+  function setEstado(nivel) {
+    if (typeof nivel !== "number") {
+      estadoDot.className = "dot";
+      estadoEl.textContent = "-";
+      return;
+    }
+    if (nivel >= NIVEL_BAD) {
+      estadoDot.className = "dot bad";
+      estadoEl.textContent = "ALTO (visual)";
+    } else if (nivel >= NIVEL_WARN) {
+      estadoDot.className = "dot warn";
+      estadoEl.textContent = "MEDIO (visual)";
+    } else {
+      estadoDot.className = "dot ok";
+      estadoEl.textContent = "Normal";
+    }
+  }
+
+  function fmt(x, decimals=2) {
+    if (x === null || x === undefined) return "-";
+    if (typeof x !== "number") return String(x);
+    return x.toFixed(decimals);
+  }
+
+  // Botón demo
+  btnDemo.addEventListener("click", () => {
+    fetch("/ingest_demo").catch(() => {});
+  });
+
+  // WebSocket
+  const ws = new WebSocket(`ws://${location.host}/ws`);
+
+  ws.onopen = () => {
+    console.log("WS conectado");
+    setConn(true);
+  };
+  ws.onerror = (e) => {
+    console.log("WS error", e);
+  };
+  ws.onclose = () => {
+    console.log("WS cerrado");
+    setConn(false);
+  };
+
+  ws.onmessage = (ev) => {
+    const data = JSON.parse(ev.data);
+
+    sourceEl.textContent = data.source ?? "-";
+    tsEl.textContent = data.ts ?? "-";
+
+    // NUEVO: refresco + si es dato nuevo
+    refEl.textContent = data.refreshed_at ?? "-";
+    isNewEl.textContent = (data.is_new === true) ? "SI" : (data.is_new === false ? "NO" : "-");
+
+    // Valores
+    const nivel = (typeof data.nivel_m === "number") ? data.nivel_m : null;
+    const caudal = (typeof data.caudal_m3s === "number") ? data.caudal_m3s : null;
+
+    nivelEl.textContent = (nivel === null) ? "-" : fmt(nivel, 2);
+    caudalEl.textContent = (caudal === null) ? "-" : fmt(caudal, 1);
+
+    tnEl.textContent = data.tendencia_nivel ?? "-";
+    tcEl.textContent = data.tendencia_caudal ?? "-";
+
+    setEstado(nivel);
+
+    // IMPORTANTE: solo añadimos fila si is_new === true
+    if (data.is_new === true) {
+      const tr = document.createElement("tr");
+      tr.innerHTML = `
+        <td class="mono">${data.ts ?? "-"}</td>
+        <td>${nivel === null ? "-" : fmt(nivel, 2)}</td>
+        <td>${caudal === null ? "-" : fmt(caudal, 1)}</td>
+        <td class="mono">${data.source ?? "-"}</td>
+      `;
+      logEl.prepend(tr);
+      if (logEl.children.length > 30) logEl.removeChild(logEl.lastChild);
+    }
+  };
+</script>
+</body>
+</html>
