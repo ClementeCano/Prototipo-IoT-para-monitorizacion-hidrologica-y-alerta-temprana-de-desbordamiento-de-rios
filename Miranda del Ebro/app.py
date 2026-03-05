@@ -1,4 +1,3 @@
-# app.py
 from dotenv import load_dotenv
 load_dotenv()
 
@@ -6,232 +5,347 @@ from pathlib import Path
 from datetime import datetime
 import asyncio
 import json
+from typing import Dict, Any, Set, Optional
 
-import numpy as np
 import requests
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect
-from fastapi.responses import HTMLResponse
+from fastapi.responses import HTMLResponse, JSONResponse
 
-from saih_opendata import fetch_saih_latest
+from saih_opendata import fetch_saih_signals
 from aemet_opendata import (
     fetch_aemet_municipio_horaria,
     extract_rain_forecast_mm,
     extract_prob_precip_summary,
 )
 
-# SAIH: límite 5 peticiones/min -> 20s = 3/min (seguro)
+# ---------------------------
+# Config
+# ---------------------------
+# SAIH rate limit: 5/min → 20s = 3/min (seguro)
 POLL_SECONDS = 20
 
-# AEMET: cache (recomendado 30 min). Para probar rápido, pon 60.
-AEMET_POLL_SECONDS = 60  # 30 min
+# AEMET: refresco real cada 30 min, comprobación cada 60s
+AEMET_REFRESH_SECONDS = 1800
+AEMET_CHECK_SECONDS = 60
 
 app = FastAPI()
 
-# ---------------------------
-# Modelo (cargado, listo)
-# ---------------------------
-MODEL = json.loads(Path("TFG_model_logreg.json").read_text(encoding="utf-8"))
-FEATS = MODEL["feature_names"]
-MU = np.array(MODEL["scaler_mean"], dtype=float)
-SD = np.array(MODEL["scaler_std"], dtype=float)
-COEF = np.array(MODEL["coef_with_bias"], dtype=float)
+SITES = json.loads(Path("sites.json").read_text(encoding="utf-8"))
+SITES_BY_ID = {s["id"]: s for s in SITES}
 
 # ---------------------------
-# Estado + conexiones WS
+# WS state
 # ---------------------------
-clients: set[WebSocket] = set()
-last_payload = None
-
-# Cache AEMET (se actualiza en loop aparte)
-aemet_cache = {
-    "aemet_refreshed_at": None,
-    "aemet_error": None,
-
-    # mm
-    "aemet_mm_6h_sum": 0.0,
-    "aemet_mm_24h_sum": 0.0,
-    "aemet_mm_6h_max": 0.0,
-    "aemet_mm_24h_max": 0.0,
-    "aemet_mm_next_hours": [],
-
-    # prob (%)
-    "aemet_prob_6h_max": None,
-    "aemet_prob_24h_max": None,
-}
-
-
-def sigmoid(z: float) -> float:
-    z = np.clip(z, -50, 50)
-    return float(1 / (1 + np.exp(-z)))
-
-
-def predict_prob(feature_dict: dict) -> float:
-    """
-    Devuelve probabilidad del modelo logístico exportado (si feature_dict contiene todas FEATS).
-    En tiempo real todavía no lo usamos hasta construir features rolling consistentes.
-    """
-    x = np.array([feature_dict[f] for f in FEATS], dtype=float)
-    xz = (x - MU) / np.where(SD == 0, 1.0, SD)
-    z = float(COEF[0] + np.dot(xz, COEF[1:]))
-    return sigmoid(z)
-
-
-async def broadcast(payload: dict) -> None:
-    dead = []
-    msg = json.dumps(payload, ensure_ascii=False)
-    for c in list(clients):
-        try:
-            await c.send_text(msg)
-        except Exception:
-            dead.append(c)
-    for d in dead:
-        clients.discard(d)
-
+clients: Set[WebSocket] = set()
+ws_site: Dict[WebSocket, str] = {}
+ws_last_ts: Dict[WebSocket, Optional[str]] = {}
 
 # ---------------------------
-# Rutas
+# Caches
+# ---------------------------
+def _default_aemet() -> Dict[str, Any]:
+    return {
+        "aemet_refreshed_at": None,
+        "aemet_error": None,
+        "aemet_mm_6h_sum": 0.0,
+        "aemet_mm_24h_sum": 0.0,
+        "aemet_mm_6h_max": 0.0,
+        "aemet_mm_24h_max": 0.0,
+        "aemet_mm_next_hours": [],
+        "aemet_prob_6h_max": None,
+        "aemet_prob_24h_max": None,
+    }
+
+# AEMET cache por sitio (con _epoch interno)
+aemet_cache_by_site: Dict[str, Dict[str, Any]] = {}
+
+# “inflight”: evita múltiples llamadas AEMET concurrentes para el mismo sitio
+aemet_inflight: set[str] = set()
+
+# SAIH cache por sitio (último nivel/caudal/tendencias)
+saih_cache_by_site: Dict[str, Dict[str, Any]] = {}
+
+def _init_caches():
+    for s in SITES:
+        sid = s["id"]
+        saih_cache_by_site.setdefault(sid, {
+            "ts": None,
+            "nivel_m": None,
+            "caudal_m3s": None,
+            "tendencia_nivel": None,
+            "tendencia_caudal": None,
+        })
+        aemet_cache_by_site.setdefault(sid, {**_default_aemet(), "_epoch": None})
+
+_init_caches()
+
+# ---------------------------
+# HTTP routes
 # ---------------------------
 @app.get("/")
 def home():
     return HTMLResponse(Path("index.html").read_text(encoding="utf-8"))
 
+@app.get("/api/sites")
+def api_sites():
+    return JSONResponse([{"id": s["id"], "name": s["name"]} for s in SITES])
 
+# ---------------------------
+# Helpers
+# ---------------------------
+def _aemet_public_cache(site_id: str) -> Dict[str, Any]:
+    c = aemet_cache_by_site.get(site_id)
+    if not c:
+        return _default_aemet()
+    return {k: v for k, v in c.items() if not k.startswith("_")}
+
+def _build_payload(site_id: str, forced_is_new: Optional[bool] = None) -> Dict[str, Any]:
+    site = SITES_BY_ID.get(site_id, {"id": site_id, "name": site_id})
+
+    sc = saih_cache_by_site.get(site_id, {})
+    ts = sc.get("ts")
+
+    payload = {
+        "site_id": site_id,
+        "site_name": site.get("name", site_id),
+
+        "ts": ts,
+        "refreshed_at": datetime.now().isoformat(timespec="seconds"),
+        "is_new": forced_is_new if forced_is_new is not None else False,
+        "source": "saih_opendata",
+
+        "nivel_m": sc.get("nivel_m"),
+        "caudal_m3s": sc.get("caudal_m3s"),
+        "tendencia_nivel": sc.get("tendencia_nivel"),
+        "tendencia_caudal": sc.get("tendencia_caudal"),
+
+        **_aemet_public_cache(site_id),
+    }
+    return payload
+
+def _collect_all_tags() -> list[str]:
+    """Prefetch de TODOS los sitios: cambio instantáneo sin esperar tick."""
+    tags: list[str] = []
+    for s in SITES:
+        nivel = (s.get("saih") or {}).get("nivel", "") or ""
+        caudal = (s.get("saih") or {}).get("caudal", "") or ""
+        if nivel: tags.append(nivel)
+        if caudal: tags.append(caudal)
+
+    out: list[str] = []
+    seen = set()
+    for t in tags:
+        if t not in seen:
+            out.append(t)
+            seen.add(t)
+    return out
+
+async def refresh_aemet_for_site(site_id: str, force: bool = True) -> bool:
+    """
+    Refresca AEMET para un site.
+    - force=True: refresca aunque no haya vencido TTL (útil al seleccionar)
+    Devuelve True si ha actualizado cache (ok o error).
+    """
+    if site_id in aemet_inflight:
+        return False
+
+    site = SITES_BY_ID.get(site_id)
+    if not site:
+        return False
+
+    muni = (site.get("aemet_muni") or "").strip()
+    if not muni:
+        return False
+
+    now_epoch = datetime.now().timestamp()
+    cur = aemet_cache_by_site.get(site_id, {**_default_aemet(), "_epoch": None})
+    last_epoch = cur.get("_epoch")
+
+    if not force:
+        if last_epoch is not None and (now_epoch - float(last_epoch)) < AEMET_REFRESH_SECONDS:
+            return False
+
+    aemet_inflight.add(site_id)
+    try:
+        data = await asyncio.to_thread(fetch_aemet_municipio_horaria, muni)
+        mm = extract_rain_forecast_mm(data)
+        pb = extract_prob_precip_summary(data)
+
+        aemet_cache_by_site[site_id] = {
+            "_epoch": now_epoch,
+            "aemet_refreshed_at": datetime.now().isoformat(timespec="seconds"),
+            "aemet_error": None,
+            **mm,
+            **pb,
+        }
+        return True
+
+    except Exception as e:
+        prev = aemet_cache_by_site.get(site_id, {**_default_aemet(), "_epoch": now_epoch})
+        aemet_cache_by_site[site_id] = {
+            **prev,
+            "_epoch": now_epoch,
+            "aemet_refreshed_at": datetime.now().isoformat(timespec="seconds"),
+            "aemet_error": repr(e),
+        }
+        return True
+
+    finally:
+        aemet_inflight.discard(site_id)
+
+# ---------------------------
+# WebSocket
+# ---------------------------
 @app.websocket("/ws")
 async def ws(websocket: WebSocket):
     await websocket.accept()
     clients.add(websocket)
 
-    try:
-        if last_payload is not None:
-            await websocket.send_text(json.dumps(last_payload, ensure_ascii=False))
+    default_site = SITES[0]["id"] if SITES else None
+    if default_site:
+        ws_site[websocket] = default_site
+        ws_last_ts[websocket] = None
 
-        # Espera pasiva (detecta desconexión)
+        # Envío inmediato al conectar
+        await websocket.send_text(json.dumps(_build_payload(default_site, forced_is_new=True), ensure_ascii=False))
+
+        # AEMET inmediato del sitio por defecto (en background)
+        async def _refresh_default():
+            updated = await refresh_aemet_for_site(default_site, force=True)
+            if updated and websocket in clients and ws_site.get(websocket) == default_site:
+                await websocket.send_text(json.dumps(_build_payload(default_site, forced_is_new=True), ensure_ascii=False))
+        asyncio.create_task(_refresh_default())
+
+    try:
         while True:
-            await websocket.receive_text()
+            msg = await websocket.receive_text()
+            try:
+                data = json.loads(msg)
+            except Exception:
+                continue
+
+            if data.get("type") == "set_site":
+                sid = data.get("site")
+                if sid in SITES_BY_ID:
+                    ws_site[websocket] = sid
+                    ws_last_ts[websocket] = None
+
+                    # 1) envío inmediato (cache SAIH + cache AEMET existente)
+                    await websocket.send_text(json.dumps(_build_payload(sid, forced_is_new=True), ensure_ascii=False))
+
+                    # 2) refresco AEMET inmediato (1 request por sitio a la vez)
+                    async def _refresh_and_push(site_id: str):
+                        updated = await refresh_aemet_for_site(site_id, force=True)
+                        if updated:
+                            if websocket in clients and ws_site.get(websocket) == site_id:
+                                await websocket.send_text(json.dumps(_build_payload(site_id, forced_is_new=True), ensure_ascii=False))
+                    asyncio.create_task(_refresh_and_push(sid))
 
     except WebSocketDisconnect:
+        pass
+    finally:
         clients.discard(websocket)
-    except Exception:
-        clients.discard(websocket)
-
-
-@app.get("/ingest_demo")
-async def ingest_demo():
-    """
-    Simula que entra un dato (para pruebas UI).
-    """
-    global last_payload
-
-    now = datetime.now().isoformat(timespec="seconds")
-    fake_features = {f: 0.0 for f in FEATS}
-    prob = predict_prob(fake_features)
-
-    last_payload = {
-        "ts": now,
-        "refreshed_at": now,
-        "is_new": True,
-
-        "nivel_m": None,
-        "caudal_m3s": None,
-        "tendencia_nivel": None,
-        "tendencia_caudal": None,
-
-        "lluvia_mm": None,
-        "prob_riesgo_7d": prob,
-        "source": "demo",
-
-        **aemet_cache
-    }
-
-    await broadcast(last_payload)
-    return last_payload
-
+        ws_site.pop(websocket, None)
+        ws_last_ts.pop(websocket, None)
 
 # ---------------------------
-# Loop AEMET (lento + cache)
+# Loops
 # ---------------------------
-async def aemet_loop():
-    global aemet_cache
+async def _refresh_saih_cache_once():
+    try:
+        tags = _collect_all_tags()
+        signals = await asyncio.to_thread(fetch_saih_signals, tags) if tags else {}
 
-    while True:
-        try:
-            # Bloqueante -> lo movemos a thread
-            data = await asyncio.to_thread(fetch_aemet_municipio_horaria, "09219")  # Miranda de Ebro
+        for s in SITES:
+            sid = s["id"]
+            nivel_tag = (s.get("saih") or {}).get("nivel", "") or ""
+            caudal_tag = (s.get("saih") or {}).get("caudal", "") or ""
 
-            summ_mm = extract_rain_forecast_mm(data)         # mm (sum/max/serie)
-            summ_pb = extract_prob_precip_summary(data)      # prob (%) (max 6h/24h)
+            nivel = signals.get(nivel_tag, {}) if nivel_tag else {}
+            caudal = signals.get(caudal_tag, {}) if caudal_tag else {}
 
-            aemet_cache.update({
-                "aemet_refreshed_at": datetime.now().isoformat(timespec="seconds"),
-                "aemet_error": None,
-                **summ_mm,
-                **summ_pb,
-            })
+            ts = nivel.get("fecha") or caudal.get("fecha")
 
-            print("[AEMET] ok:", {
-                "ref": aemet_cache["aemet_refreshed_at"],
-                "mm24": aemet_cache["aemet_mm_24h_sum"],
-                "p24": aemet_cache["aemet_prob_24h_max"],
-            })
-
-        except Exception as e:
-            aemet_cache["aemet_error"] = repr(e)
-            print("[AEMET] error:", aemet_cache["aemet_error"])
-
-        await asyncio.sleep(AEMET_POLL_SECONDS)
-
-
-# ---------------------------
-# Polling SAIH OpenData (heartbeat)
-# ---------------------------
-last_ts_data = None  # último ts del dato SAIH
-
-async def poll_loop():
-    global last_payload, last_ts_data
-
-    while True:
-        try:
-            latest = fetch_saih_latest()
-            ts = latest.get("ts")
-
-            is_new = (ts != last_ts_data)
-            if is_new:
-                last_ts_data = ts
-
-            last_payload = {
-                "ts": ts,  # timestamp del dato SAIH
-                "refreshed_at": datetime.now().isoformat(timespec="seconds"),
-                "is_new": is_new,
-
-                "nivel_m": latest.get("nivel_m"),
-                "caudal_m3s": latest.get("caudal_m3s"),
-                "tendencia_nivel": latest.get("tendencia_nivel"),
-                "tendencia_caudal": latest.get("tendencia_caudal"),
-
-                "lluvia_mm": None,
-                "prob_riesgo_7d": None,
-                "source": "saih_opendata",
-
-                **aemet_cache
+            saih_cache_by_site[sid] = {
+                "ts": ts,
+                "nivel_m": nivel.get("valor"),
+                "caudal_m3s": caudal.get("valor"),
+                "tendencia_nivel": nivel.get("tendencia"),
+                "tendencia_caudal": caudal.get("tendencia"),
             }
 
-            await broadcast(last_payload)
-            print("[OK] tick:", last_payload["refreshed_at"], "| data_ts:", ts, "| new:", is_new)
+    except requests.HTTPError as e:
+        if e.response is not None and e.response.status_code == 429:
+            await asyncio.sleep(60)
+            return
+        print("[SAIH ERROR]", repr(e))
+    except Exception as e:
+        print("[SAIH ERROR]", repr(e))
 
-        except requests.HTTPError as e:
-            if e.response is not None and e.response.status_code == 429:
-                print("[RATE LIMIT] 429 -> espero 60s")
-                await asyncio.sleep(60)
-                continue
-            print("[ERROR]", repr(e))
+async def _push_to_clients_from_cache():
+    for ws in list(clients):
+        sid = ws_site.get(ws)
+        if not sid:
+            continue
 
-        except Exception as e:
-            print("[ERROR]", repr(e))
+        ts = saih_cache_by_site.get(sid, {}).get("ts")
+        last_ts = ws_last_ts.get(ws)
+        is_new = (ts is not None and ts != last_ts)
+        ws_last_ts[ws] = ts
 
+        payload = _build_payload(sid, forced_is_new=is_new)
+
+        try:
+            await ws.send_text(json.dumps(payload, ensure_ascii=False))
+        except Exception:
+            clients.discard(ws)
+            ws_site.pop(ws, None)
+            ws_last_ts.pop(ws, None)
+
+async def poll_saih_loop():
+    # primera carga inmediata al arrancar
+    await _refresh_saih_cache_once()
+    await _push_to_clients_from_cache()
+
+    while True:
+        await _refresh_saih_cache_once()
+        await _push_to_clients_from_cache()
         await asyncio.sleep(POLL_SECONDS)
 
+async def poll_aemet_loop():
+    """
+    Mantiene el cache fresco con TTL, para los sitios activos.
+    Aunque el refresco principal se hace "on demand" al cambiar de sitio,
+    este loop evita que se quede viejo con sesiones largas.
+    """
+    while True:
+        try:
+            active_sites = set(ws_site.values())
+            now_epoch = datetime.now().timestamp()
+
+            for sid in active_sites:
+                site = SITES_BY_ID.get(sid)
+                if not site:
+                    continue
+
+                muni = (site.get("aemet_muni") or "").strip()
+                if not muni:
+                    continue
+
+                cur = aemet_cache_by_site.get(sid, {**_default_aemet(), "_epoch": None})
+                last_epoch = cur.get("_epoch")
+                if last_epoch is not None and (now_epoch - float(last_epoch)) < AEMET_REFRESH_SECONDS:
+                    continue
+
+                # refresca respetando inflight
+                await refresh_aemet_for_site(sid, force=False)
+
+        except Exception as e:
+            print("[AEMET LOOP ERROR]", repr(e))
+
+        await asyncio.sleep(AEMET_CHECK_SECONDS)
 
 @app.on_event("startup")
 async def on_startup():
-    asyncio.create_task(aemet_loop())
-    asyncio.create_task(poll_loop())
+    asyncio.create_task(poll_saih_loop())
+    asyncio.create_task(poll_aemet_loop())

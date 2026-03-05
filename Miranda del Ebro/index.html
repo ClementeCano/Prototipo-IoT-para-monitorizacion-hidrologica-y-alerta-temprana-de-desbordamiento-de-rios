@@ -3,7 +3,7 @@
 <head>
   <meta charset="utf-8"/>
   <meta name="viewport" content="width=device-width, initial-scale=1"/>
-  <title>TFG Río Ebro – Miranda (Tiempo real)</title>
+  <title>TFG Río Ebro – Tiempo real</title>
 <style>
   :root{
     --bg0:#05070d;
@@ -11,15 +11,14 @@
     --glass: rgba(255,255,255,.06);
     --glass2: rgba(255,255,255,.09);
     --stroke: rgba(255,255,255,.12);
-    --stroke2: rgba(255,255,255,.18);
 
     --text: rgba(255,255,255,.92);
     --muted: rgba(255,255,255,.62);
     --muted2: rgba(255,255,255,.48);
 
-    --a: #7c3aed;   /* violeta */
-    --b: #06b6d4;   /* cyan */
-    --c: #22c55e;   /* green */
+    --a: #7c3aed;
+    --b: #06b6d4;
+    --c: #22c55e;
     --warn:#f59e0b;
     --bad:#ef4444;
 
@@ -43,8 +42,6 @@
     letter-spacing: .15px;
   }
 
-  ::selection{ background: rgba(6,182,212,.35); }
-
   .layout{ max-width: 1180px; margin: 0 auto; }
 
   h1{
@@ -61,7 +58,6 @@
     line-height: 1.5;
   }
 
-  /* grid */
   .topgrid{
     display:grid;
     grid-template-columns: 1fr;
@@ -71,7 +67,6 @@
     .topgrid{ grid-template-columns: 1.25fr 0.75fr; }
   }
 
-  /* cards – glassy, modern */
   .card{
     position: relative;
     background: linear-gradient(180deg, var(--glass2) 0%, var(--glass) 100%);
@@ -84,7 +79,6 @@
     overflow: hidden;
   }
 
-  /* subtle highlight */
   .card::before{
     content:"";
     position:absolute;
@@ -95,19 +89,6 @@
     pointer-events:none;
   }
 
-  /* ambient border glow */
-  .card::after{
-    content:"";
-    position:absolute;
-    inset:0;
-    border-radius: var(--r2);
-    pointer-events:none;
-    box-shadow:
-      0 0 0 1px rgba(255,255,255,.06) inset,
-      0 0 0 1px rgba(124,58,237,.04);
-  }
-
-  /* row */
   .row{
     display:flex;
     gap: 10px;
@@ -115,7 +96,6 @@
     align-items: center;
   }
 
-  /* pills */
   .pill{
     display:inline-flex;
     align-items:center;
@@ -134,7 +114,17 @@
     font-variant-numeric: tabular-nums;
   }
 
-  /* KPI */
+  select{
+    background: transparent;
+    color: var(--text);
+    border: none;
+    outline: none;
+    font-weight: 900;
+    appearance: none;
+    padding-right: 16px;
+  }
+  option{ background: #0b1020; color: var(--text); }
+
   .kpi{
     display:grid;
     grid-template-columns: 1fr 1fr;
@@ -161,29 +151,17 @@
     color: transparent;
   }
 
-  /* dots */
   .dot{
-    width: 10px;
-    height: 10px;
+    width: 10px; height: 10px;
     border-radius: 50%;
     display:inline-block;
     background: rgba(255,255,255,.35);
     box-shadow: 0 0 0 3px rgba(255,255,255,.06);
   }
-  .dot.ok{
-    background: var(--c);
-    box-shadow: 0 0 0 3px rgba(34,197,94,.16), 0 0 18px rgba(34,197,94,.25);
-  }
-  .dot.warn{
-    background: var(--warn);
-    box-shadow: 0 0 0 3px rgba(245,158,11,.16), 0 0 18px rgba(245,158,11,.22);
-  }
-  .dot.bad{
-    background: var(--bad);
-    box-shadow: 0 0 0 3px rgba(239,68,68,.16), 0 0 18px rgba(239,68,68,.22);
-  }
+  .dot.ok{ background: var(--c); box-shadow: 0 0 0 3px rgba(34,197,94,.16), 0 0 18px rgba(34,197,94,.25); }
+  .dot.warn{ background: var(--warn); box-shadow: 0 0 0 3px rgba(245,158,11,.16), 0 0 18px rgba(245,158,11,.22); }
+  .dot.bad{ background: var(--bad); box-shadow: 0 0 0 3px rgba(239,68,68,.16), 0 0 18px rgba(239,68,68,.22); }
 
-  /* section title */
   .sectiontitle{
     margin: 0 0 12px 0;
     font-weight: 950;
@@ -191,7 +169,6 @@
     font-size: 16px;
   }
 
-  /* bars */
   .barwrap{ margin-top: 12px; }
   .barlabel{
     display:flex;
@@ -218,7 +195,6 @@
     transition: width .25s ease;
   }
 
-  /* error box */
   .err{
     color: rgba(255,255,255,.88);
     font-size: 12px;
@@ -231,7 +207,6 @@
     display:none;
   }
 
-  /* tables – modern + hover */
   table{
     width: 100%;
     border-collapse: separate;
@@ -243,13 +218,11 @@
     overflow: hidden;
     background: rgba(255,255,255,.03);
   }
-
   th, td{
     border-bottom: 1px solid rgba(255,255,255,.07);
     padding: 11px 10px;
     text-align: left;
   }
-
   th{
     font-size: 11.5px;
     color: var(--muted2);
@@ -257,13 +230,8 @@
     letter-spacing: .10em;
     background: rgba(255,255,255,.05);
   }
-
-  tbody tr:hover td{
-    background: rgba(6,182,212,.08);
-  }
   tbody tr:last-child td{ border-bottom: 0; }
 
-  /* little divider for the top header row inside left card */
   .card > .row[style*="justify-content: space-between"]{
     padding-bottom: 10px;
     margin-bottom: 10px;
@@ -274,18 +242,24 @@
 
 <body>
   <div class="layout">
-    <h1>Dashboard Río Ebro – Miranda de Ebro</h1>
-    <div class="muted">Izquierda: SAIH (nivel/caudal). Derecha: AEMET (lluvia en mm + probabilidad).</div>
+    <h1 id="title">Dashboard Río Ebro</h1>
+    <div class="muted">Selecciona un lugar y verás nivel/caudal (SAIH) y lluvia (AEMET).</div>
 
     <div class="topgrid">
-      <!-- IZQUIERDA: Río -->
+      <!-- IZQUIERDA -->
       <div class="card">
         <div class="row" style="justify-content: space-between;">
           <div class="row">
             <span class="pill"><span class="dot" id="connDot"></span> <span id="connText">Desconectado</span></span>
+
+            <span class="pill">
+              Lugar:
+              <select id="siteSelect" class="mono"></select>
+            </span>
+
             <span class="pill">Fuente: <span id="source" class="mono">-</span></span>
-            <span class="pill">Última medida (SAIH): <span id="ts" class="mono">-</span></span>
-            <span class="pill">Refresco servidor: <span id="ref" class="mono">-</span></span>
+            <span class="pill">Última medida: <span id="ts" class="mono">-</span></span>
+            <span class="pill">Refresco: <span id="ref" class="mono">-</span></span>
             <span class="pill">Dato nuevo: <span id="isNew" class="mono">-</span></span>
           </div>
         </div>
@@ -307,12 +281,12 @@
           <div class="label">Estado (visual)</div>
           <div class="pill"><span class="dot" id="estadoDot"></span> <span id="estadoTxt">-</span></div>
           <div class="muted" style="margin-top:8px; font-size: 12px;">
-            * Estado visual por umbral simple de nivel. Alertas/predicción se añaden después.
+            * Estado visual por umbral simple de nivel.
           </div>
         </div>
       </div>
 
-      <!-- DERECHA: Lluvia -->
+      <!-- DERECHA -->
       <div class="card">
         <h3 class="sectiontitle">Predicción de lluvia (AEMET)</h3>
 
@@ -368,6 +342,8 @@
 <script>
   const connDot = document.getElementById("connDot");
   const connText = document.getElementById("connText");
+  const siteSelect = document.getElementById("siteSelect");
+  const titleEl = document.getElementById("title");
 
   const sourceEl = document.getElementById("source");
   const tsEl = document.getElementById("ts");
@@ -382,7 +358,6 @@
   const estadoDot = document.getElementById("estadoDot");
   const estadoTxt = document.getElementById("estadoTxt");
 
-  // AEMET
   const aemetRef = document.getElementById("aemetRef");
   const aemetErr = document.getElementById("aemetErr");
 
@@ -397,11 +372,9 @@
   const barP24 = document.getElementById("barP24");
 
   const mmTable = document.getElementById("mmTable");
-
   const rainDot = document.getElementById("rainDot");
   const rainState = document.getElementById("rainState");
 
-  // Umbrales visuales (río)
   const NIVEL_WARN = 2.0;
   const NIVEL_BAD  = 3.0;
 
@@ -480,58 +453,83 @@
     }
   }
 
-  const ws = new WebSocket(`ws://${location.host}/ws`);
+  let ws = null;
+  let currentSite = null;
 
-  ws.onopen = () => setConn(true);
-  ws.onerror = (e) => console.log("WS error", e);
-  ws.onclose = () => setConn(false);
+  async function loadSites() {
+    const res = await fetch("/api/sites");
+    const sites = await res.json();
 
-  ws.onmessage = (ev) => {
-    const data = JSON.parse(ev.data);
+    siteSelect.innerHTML = sites.map(s => `<option value="${s.id}">${s.name}</option>`).join("");
+    currentSite = sites[0]?.id ?? null;
 
-    // Cabecera
-    sourceEl.textContent = data.source ?? "-";
-    tsEl.textContent = data.ts ?? "-";
-    refEl.textContent = data.refreshed_at ?? "-";
-    isNewEl.textContent = (data.is_new === true) ? "SI" : (data.is_new === false ? "NO" : "-");
+    siteSelect.addEventListener("change", () => {
+      currentSite = siteSelect.value;
+      if (ws && ws.readyState === WebSocket.OPEN) {
+        ws.send(JSON.stringify({ type: "set_site", site: currentSite }));
+      }
+    });
 
-    // Río
-    const nivel = (typeof data.nivel_m === "number") ? data.nivel_m : null;
-    const caudal = (typeof data.caudal_m3s === "number") ? data.caudal_m3s : null;
+    startWS();
+  }
 
-    nivelEl.textContent = (nivel === null) ? "-" : fmt(nivel, 2);
-    caudalEl.textContent = (caudal === null) ? "-" : fmt(caudal, 1);
+  function startWS() {
+    ws = new WebSocket(`ws://${location.host}/ws`);
 
-    tnEl.textContent = data.tendencia_nivel ?? "-";
-    tcEl.textContent = data.tendencia_caudal ?? "-";
+    ws.onopen = () => {
+      setConn(true);
+      if (currentSite) ws.send(JSON.stringify({ type: "set_site", site: currentSite }));
+    };
+    ws.onclose = () => setConn(false);
+    ws.onerror = (e) => console.log("WS error", e);
 
-    setEstadoRio(nivel);
+    ws.onmessage = (ev) => {
+      const data = JSON.parse(ev.data);
 
-    // AEMET
-    aemetRef.textContent = data.aemet_refreshed_at ?? "-";
+      if (data.site_name) titleEl.textContent = `Dashboard Río Ebro – ${data.site_name}`;
 
-    const err = data.aemet_error ?? "";
-    if (err) {
-      aemetErr.style.display = "block";
-      aemetErr.textContent = `Error AEMET: ${err}`;
-    } else {
-      aemetErr.style.display = "none";
-      aemetErr.textContent = "";
-    }
+      sourceEl.textContent = data.source ?? "-";
+      tsEl.textContent = data.ts ?? "-";
+      refEl.textContent = data.refreshed_at ?? "-";
+      isNewEl.textContent = (data.is_new === true) ? "SI" : (data.is_new === false ? "NO" : "-");
 
-    mm6sum.textContent = (data.aemet_mm_6h_sum ?? "-");
-    mm24sum.textContent = (data.aemet_mm_24h_sum ?? "-");
-    mm6max.textContent = (data.aemet_mm_6h_max ?? "-");
-    mm24max.textContent = (data.aemet_mm_24h_max ?? "-");
+      const nivel = (typeof data.nivel_m === "number") ? data.nivel_m : null;
+      const caudal = (typeof data.caudal_m3s === "number") ? data.caudal_m3s : null;
 
-    p6.textContent = (data.aemet_prob_6h_max ?? "-");
-    p24.textContent = (data.aemet_prob_24h_max ?? "-");
+      nivelEl.textContent = (nivel === null) ? "-" : fmt(nivel, 2);
+      caudalEl.textContent = (caudal === null) ? "-" : fmt(caudal, 1);
 
-    setProbBars(data.aemet_prob_6h_max, data.aemet_prob_24h_max);
-    renderMmTable(data.aemet_mm_next_hours);
+      tnEl.textContent = data.tendencia_nivel ?? "-";
+      tcEl.textContent = data.tendencia_caudal ?? "-";
 
-    setRainState(data.aemet_mm_24h_sum, data.aemet_prob_24h_max);
-  };
+      setEstadoRio(nivel);
+
+      aemetRef.textContent = data.aemet_refreshed_at ?? "-";
+
+      const err = data.aemet_error ?? "";
+      if (err) {
+        aemetErr.style.display = "block";
+        aemetErr.textContent = `Error AEMET: ${err}`;
+      } else {
+        aemetErr.style.display = "none";
+        aemetErr.textContent = "";
+      }
+
+      mm6sum.textContent = (data.aemet_mm_6h_sum ?? "-");
+      mm24sum.textContent = (data.aemet_mm_24h_sum ?? "-");
+      mm6max.textContent = (data.aemet_mm_6h_max ?? "-");
+      mm24max.textContent = (data.aemet_mm_24h_max ?? "-");
+
+      p6.textContent = (data.aemet_prob_6h_max ?? "-");
+      p24.textContent = (data.aemet_prob_24h_max ?? "-");
+
+      setProbBars(data.aemet_prob_6h_max, data.aemet_prob_24h_max);
+      renderMmTable(data.aemet_mm_next_hours);
+      setRainState(data.aemet_mm_24h_sum, data.aemet_prob_24h_max);
+    };
+  }
+
+  loadSites();
 </script>
 </body>
 </html>
