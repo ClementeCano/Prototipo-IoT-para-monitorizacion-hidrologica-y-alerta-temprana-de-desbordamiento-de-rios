@@ -129,8 +129,10 @@ def _collect_all_tags() -> list[str]:
     for s in SITES:
         nivel = (s.get("saih") or {}).get("nivel", "") or ""
         caudal = (s.get("saih") or {}).get("caudal", "") or ""
-        if nivel: tags.append(nivel)
-        if caudal: tags.append(caudal)
+        if nivel:
+            tags.append(nivel)
+        if caudal:
+            tags.append(caudal)
 
     out: list[str] = []
     seen = set()
@@ -139,6 +141,9 @@ def _collect_all_tags() -> list[str]:
             out.append(t)
             seen.add(t)
     return out
+
+def _chunk(lst: list[str], n: int) -> list[list[str]]:
+    return [lst[i:i+n] for i in range(0, len(lst), n)]
 
 async def refresh_aemet_for_site(site_id: str, force: bool = True) -> bool:
     """
@@ -252,33 +257,55 @@ async def ws(websocket: WebSocket):
 # Loops
 # ---------------------------
 async def _refresh_saih_cache_once():
+    """
+    Prefetch global, pero en BATCHES para evitar URL gigante y timeouts.
+    Además, si un batch falla, no machacamos el cache con None: conservamos el último dato válido.
+    """
     try:
         tags = _collect_all_tags()
-        signals = await asyncio.to_thread(fetch_saih_signals, tags) if tags else {}
+        if not tags:
+            return
 
+        # 20 tags = 10 sitios (nivel+caudal). Ajusta si quieres.
+        BATCH_SIZE = 20
+
+        all_signals: Dict[str, Dict[str, Any]] = {}
+
+        for batch in _chunk(tags, BATCH_SIZE):
+            try:
+                signals = await asyncio.to_thread(fetch_saih_signals, batch)
+                all_signals.update(signals)
+            except requests.HTTPError as e:
+                # Rate limit
+                if e.response is not None and e.response.status_code == 429:
+                    await asyncio.sleep(60)
+                print("[SAIH ERROR batch HTTP]", repr(e))
+            except Exception as e:
+                print("[SAIH ERROR batch]", repr(e))
+
+            # mini respiro entre batches
+            await asyncio.sleep(0.2)
+
+        # Actualiza cache por sitio SIN machacar con None si no hay dato en esta ronda
         for s in SITES:
             sid = s["id"]
             nivel_tag = (s.get("saih") or {}).get("nivel", "") or ""
             caudal_tag = (s.get("saih") or {}).get("caudal", "") or ""
 
-            nivel = signals.get(nivel_tag, {}) if nivel_tag else {}
-            caudal = signals.get(caudal_tag, {}) if caudal_tag else {}
+            nivel = all_signals.get(nivel_tag, {}) if nivel_tag else {}
+            caudal = all_signals.get(caudal_tag, {}) if caudal_tag else {}
 
-            ts = nivel.get("fecha") or caudal.get("fecha")
+            ts = (nivel.get("fecha") or caudal.get("fecha")) if (nivel or caudal) else None
+            prev = saih_cache_by_site.get(sid, {})
 
             saih_cache_by_site[sid] = {
-                "ts": ts,
-                "nivel_m": nivel.get("valor"),
-                "caudal_m3s": caudal.get("valor"),
-                "tendencia_nivel": nivel.get("tendencia"),
-                "tendencia_caudal": caudal.get("tendencia"),
+                "ts": ts or prev.get("ts"),
+                "nivel_m": (nivel.get("valor") if nivel else prev.get("nivel_m")),
+                "caudal_m3s": (caudal.get("valor") if caudal else prev.get("caudal_m3s")),
+                "tendencia_nivel": (nivel.get("tendencia") if nivel else prev.get("tendencia_nivel")),
+                "tendencia_caudal": (caudal.get("tendencia") if caudal else prev.get("tendencia_caudal")),
             }
 
-    except requests.HTTPError as e:
-        if e.response is not None and e.response.status_code == 429:
-            await asyncio.sleep(60)
-            return
-        print("[SAIH ERROR]", repr(e))
     except Exception as e:
         print("[SAIH ERROR]", repr(e))
 
