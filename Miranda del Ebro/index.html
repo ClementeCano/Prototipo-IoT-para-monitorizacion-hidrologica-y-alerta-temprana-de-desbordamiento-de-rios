@@ -4,6 +4,7 @@
   <meta charset="utf-8"/>
   <meta name="viewport" content="width=device-width, initial-scale=1"/>
   <title>TFG Río Ebro – Tiempo real</title>
+  <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
 <style>
   :root{
     --bg0:#05070d;
@@ -237,13 +238,18 @@
     margin-bottom: 10px;
     border-bottom: 1px dashed rgba(255,255,255,.14);
   }
+
+  .chartwrap{
+    height: 320px;
+    position: relative;
+  }
 </style>
 </head>
 
 <body>
   <div class="layout">
     <h1 id="title">Dashboard Río Ebro</h1>
-    <div class="muted">Selecciona un lugar y verás nivel/caudal (SAIH) y lluvia (AEMET).</div>
+    <div class="muted">Selecciona un lugar y verás nivel/caudal (SAIH), lluvia (AEMET) y una predicción IA de una semana.</div>
 
     <div class="topgrid">
       <!-- IZQUIERDA -->
@@ -337,6 +343,23 @@
         </div>
       </div>
     </div>
+
+    <!-- IA -->
+    <div class="card" style="margin-top: 14px;">
+      <div class="row" style="justify-content: space-between;">
+        <h3 class="sectiontitle" style="margin:0;">Predicción IA (7 días)</h3>
+        <div class="row">
+          <span class="pill">IA refresco: <span id="iaRef" class="mono">-</span></span>
+          <span class="pill">Estado IA: <span id="iaState" class="mono">-</span></span>
+        </div>
+      </div>
+
+      <div id="iaErr" class="err"></div>
+
+      <div class="chartwrap">
+        <canvas id="predChart"></canvas>
+      </div>
+    </div>
   </div>
 
 <script>
@@ -375,8 +398,14 @@
   const rainDot = document.getElementById("rainDot");
   const rainState = document.getElementById("rainState");
 
+  const iaRef = document.getElementById("iaRef");
+  const iaErr = document.getElementById("iaErr");
+  const iaState = document.getElementById("iaState");
+
   const NIVEL_WARN = 2.0;
   const NIVEL_BAD  = 3.0;
+
+  let predChart = null;
 
   function setConn(isUp) {
     connDot.className = "dot " + (isUp ? "ok" : "");
@@ -385,8 +414,9 @@
 
   function fmt(x, decimals=2) {
     if (x === null || x === undefined) return "-";
-    if (typeof x !== "number") return String(x);
-    return x.toFixed(decimals);
+    const n = Number(x);
+    if (Number.isNaN(n)) return String(x);
+    return n.toFixed(decimals);
   }
 
   function setEstadoRio(nivel) {
@@ -453,6 +483,103 @@
     }
   }
 
+  function updatePredChart(pred) {
+    const canvas = document.getElementById("predChart");
+    if (!canvas) return;
+
+    if (!Array.isArray(pred) || pred.length === 0) {
+      if (predChart) {
+        predChart.destroy();
+        predChart = null;
+      }
+      return;
+    }
+
+    const labels = pred.map((_, i) => `Día ${i + 1}`);
+    const nivel = pred.map(p => Array.isArray(p) ? p[0] : null);
+    const caudal = pred.map(p => Array.isArray(p) ? p[1] : null);
+
+    if (predChart) predChart.destroy();
+
+    predChart = new Chart(canvas, {
+      type: "line",
+      data: {
+        labels,
+        datasets: [
+          {
+            label: "Nivel (m)",
+            data: nivel,
+            tension: 0.25,
+            borderColor: "rgba(6,182,212,1)",
+            backgroundColor: "rgba(6,182,212,.15)",
+            yAxisID: "yNivel",
+          },
+          {
+            label: "Caudal (m³/s)",
+            data: caudal,
+            tension: 0.25,
+            borderColor: "rgba(124,58,237,1)",
+            backgroundColor: "rgba(124,58,237,.15)",
+            yAxisID: "yCaudal",
+          }
+        ]
+      },
+      options: {
+        responsive: true,
+        maintainAspectRatio: false,
+        interaction: {
+          mode: "index",
+          intersect: false
+        },
+        plugins: {
+          legend: {
+            labels: {
+              color: "rgba(255,255,255,.9)"
+            }
+          }
+        },
+        scales: {
+          x: {
+            ticks: { color: "rgba(255,255,255,.7)" },
+            grid: { color: "rgba(255,255,255,.08)" }
+          },
+          yNivel: {
+            type: "linear",
+            position: "left",
+            ticks: { color: "rgba(255,255,255,.7)" },
+            grid: { color: "rgba(255,255,255,.08)" }
+          },
+          yCaudal: {
+            type: "linear",
+            position: "right",
+            ticks: { color: "rgba(255,255,255,.7)" },
+            grid: { drawOnChartArea: false }
+          }
+        }
+      }
+    });
+  }
+
+  function updateIAState(error, pred) {
+    iaRef.textContent = window._lastIaRef ?? "-";
+
+    if (error) {
+      iaErr.style.display = "block";
+      iaErr.textContent = `Error IA: ${error}`;
+      iaState.textContent = "Error";
+      return;
+    }
+
+    iaErr.style.display = "none";
+    iaErr.textContent = "";
+
+    if (Array.isArray(pred) && pred.length > 0) {
+      iaState.textContent = "Disponible";
+    } else {
+      iaState.textContent = "Sin datos";
+    }
+  }
+
   let ws = null;
   let currentSite = null;
 
@@ -474,7 +601,8 @@
   }
 
   function startWS() {
-    ws = new WebSocket(`ws://${location.host}/ws`);
+    const protocol = (location.protocol === "https:") ? "wss" : "ws";
+    ws = new WebSocket(`${protocol}://${location.host}/ws`);
 
     ws.onopen = () => {
       setConn(true);
@@ -526,6 +654,10 @@
       setProbBars(data.aemet_prob_6h_max, data.aemet_prob_24h_max);
       renderMmTable(data.aemet_mm_next_hours);
       setRainState(data.aemet_mm_24h_sum, data.aemet_prob_24h_max);
+
+      window._lastIaRef = data.ia_refreshed_at ?? "-";
+      updateIAState(data.ia_error, data.pred_semana);
+      updatePredChart(data.pred_semana);
     };
   }
 

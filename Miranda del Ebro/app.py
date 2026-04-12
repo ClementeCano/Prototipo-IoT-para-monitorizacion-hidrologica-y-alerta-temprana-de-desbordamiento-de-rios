@@ -8,6 +8,7 @@ import json
 from typing import Dict, Any, Set, Optional
 
 import requests
+import pandas as pd
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect
 from fastapi.responses import HTMLResponse, JSONResponse
 
@@ -17,6 +18,13 @@ from aemet_opendata import (
     extract_rain_forecast_mm,
     extract_prob_precip_summary,
 )
+
+# Predicción IA
+try:
+    from prediccion import predecir_semana
+except Exception:
+    predecir_semana = None
+
 
 # ---------------------------
 # Config
@@ -32,6 +40,10 @@ app = FastAPI()
 
 SITES = json.loads(Path("sites.json").read_text(encoding="utf-8"))
 SITES_BY_ID = {s["id"]: s for s in SITES}
+
+# Cache simple del dataset para IA
+_dataset_modelo_cache: Optional[pd.DataFrame] = None
+
 
 # ---------------------------
 # WS state
@@ -65,6 +77,16 @@ aemet_inflight: set[str] = set()
 # SAIH cache por sitio (último nivel/caudal/tendencias)
 saih_cache_by_site: Dict[str, Dict[str, Any]] = {}
 
+# IA cache por sitio
+ia_cache_by_site: Dict[str, Dict[str, Any]] = {}
+
+def _default_ia() -> Dict[str, Any]:
+    return {
+        "ia_refreshed_at": None,
+        "ia_error": None,
+        "pred_semana": [],
+    }
+
 def _init_caches():
     for s in SITES:
         sid = s["id"]
@@ -76,8 +98,10 @@ def _init_caches():
             "tendencia_caudal": None,
         })
         aemet_cache_by_site.setdefault(sid, {**_default_aemet(), "_epoch": None})
+        ia_cache_by_site.setdefault(sid, _default_ia())
 
 _init_caches()
+
 
 # ---------------------------
 # HTTP routes
@@ -90,6 +114,7 @@ def home():
 def api_sites():
     return JSONResponse([{"id": s["id"], "name": s["name"]} for s in SITES])
 
+
 # ---------------------------
 # Helpers
 # ---------------------------
@@ -98,6 +123,18 @@ def _aemet_public_cache(site_id: str) -> Dict[str, Any]:
     if not c:
         return _default_aemet()
     return {k: v for k, v in c.items() if not k.startswith("_")}
+
+def _ia_public_cache(site_id: str) -> Dict[str, Any]:
+    c = ia_cache_by_site.get(site_id)
+    if not c:
+        return _default_ia()
+    return c
+
+def _load_dataset_modelo() -> pd.DataFrame:
+    global _dataset_modelo_cache
+    if _dataset_modelo_cache is None:
+        _dataset_modelo_cache = pd.read_csv("dataset_modelo.csv")
+    return _dataset_modelo_cache
 
 def _build_payload(site_id: str, forced_is_new: Optional[bool] = None) -> Dict[str, Any]:
     site = SITES_BY_ID.get(site_id, {"id": site_id, "name": site_id})
@@ -120,6 +157,7 @@ def _build_payload(site_id: str, forced_is_new: Optional[bool] = None) -> Dict[s
         "tendencia_caudal": sc.get("tendencia_caudal"),
 
         **_aemet_public_cache(site_id),
+        **_ia_public_cache(site_id),
     }
     return payload
 
@@ -144,6 +182,63 @@ def _collect_all_tags() -> list[str]:
 
 def _chunk(lst: list[str], n: int) -> list[list[str]]:
     return [lst[i:i+n] for i in range(0, len(lst), n)]
+
+def _normalize_site_name_for_model(site_name: str) -> str:
+    """
+    Ajusta algunos nombres para que coincidan con el dataset_modelo.csv.
+    Cambia aquí si tus nombres reales son distintos.
+    """
+    mapping = {
+        "Ascó": "Asco",
+        "Castejón": "Castejon",
+    }
+    return mapping.get(site_name, site_name)
+
+async def refresh_ia_for_site(site_id: str) -> bool:
+    """
+    Calcula la predicción IA para el sitio actual usando el dataset unificado.
+    """
+    if predecir_semana is None:
+        ia_cache_by_site[site_id] = {
+            "ia_refreshed_at": datetime.now().isoformat(timespec="seconds"),
+            "ia_error": "No se pudo importar prediccion.py",
+            "pred_semana": [],
+        }
+        return False
+
+    site = SITES_BY_ID.get(site_id)
+    if not site:
+        return False
+
+    site_name = _normalize_site_name_for_model(site.get("name", site_id))
+
+    try:
+        df_modelo = _load_dataset_modelo()
+
+        # Intenta primero con site_name; si la función no lo acepta, cae al fallback
+        try:
+            pred = predecir_semana(df_modelo, site_name=site_name)
+        except TypeError:
+            pred = predecir_semana(df_modelo)
+
+        # Validación ligera
+        if pred is None:
+            pred = []
+
+        ia_cache_by_site[site_id] = {
+            "ia_refreshed_at": datetime.now().isoformat(timespec="seconds"),
+            "ia_error": None,
+            "pred_semana": pred,
+        }
+        return True
+
+    except Exception as e:
+        ia_cache_by_site[site_id] = {
+            "ia_refreshed_at": datetime.now().isoformat(timespec="seconds"),
+            "ia_error": repr(e),
+            "pred_semana": [],
+        }
+        return False
 
 async def refresh_aemet_for_site(site_id: str, force: bool = True) -> bool:
     """
@@ -198,6 +293,7 @@ async def refresh_aemet_for_site(site_id: str, force: bool = True) -> bool:
     finally:
         aemet_inflight.discard(site_id)
 
+
 # ---------------------------
 # WebSocket
 # ---------------------------
@@ -214,10 +310,11 @@ async def ws(websocket: WebSocket):
         # Envío inmediato al conectar
         await websocket.send_text(json.dumps(_build_payload(default_site, forced_is_new=True), ensure_ascii=False))
 
-        # AEMET inmediato del sitio por defecto (en background)
+        # Refrescos inmediatos en background
         async def _refresh_default():
-            updated = await refresh_aemet_for_site(default_site, force=True)
-            if updated and websocket in clients and ws_site.get(websocket) == default_site:
+            updated_aemet = await refresh_aemet_for_site(default_site, force=True)
+            updated_ia = await refresh_ia_for_site(default_site)
+            if (updated_aemet or updated_ia) and websocket in clients and ws_site.get(websocket) == default_site:
                 await websocket.send_text(json.dumps(_build_payload(default_site, forced_is_new=True), ensure_ascii=False))
         asyncio.create_task(_refresh_default())
 
@@ -235,13 +332,14 @@ async def ws(websocket: WebSocket):
                     ws_site[websocket] = sid
                     ws_last_ts[websocket] = None
 
-                    # 1) envío inmediato (cache SAIH + cache AEMET existente)
+                    # 1) envío inmediato (cache SAIH + cache AEMET + cache IA existente)
                     await websocket.send_text(json.dumps(_build_payload(sid, forced_is_new=True), ensure_ascii=False))
 
-                    # 2) refresco AEMET inmediato (1 request por sitio a la vez)
+                    # 2) refrescos inmediatos
                     async def _refresh_and_push(site_id: str):
-                        updated = await refresh_aemet_for_site(site_id, force=True)
-                        if updated:
+                        updated_aemet = await refresh_aemet_for_site(site_id, force=True)
+                        updated_ia = await refresh_ia_for_site(site_id)
+                        if updated_aemet or updated_ia:
                             if websocket in clients and ws_site.get(websocket) == site_id:
                                 await websocket.send_text(json.dumps(_build_payload(site_id, forced_is_new=True), ensure_ascii=False))
                     asyncio.create_task(_refresh_and_push(sid))
@@ -252,6 +350,7 @@ async def ws(websocket: WebSocket):
         clients.discard(websocket)
         ws_site.pop(websocket, None)
         ws_last_ts.pop(websocket, None)
+
 
 # ---------------------------
 # Loops
@@ -266,9 +365,7 @@ async def _refresh_saih_cache_once():
         if not tags:
             return
 
-        # 20 tags = 10 sitios (nivel+caudal). Ajusta si quieres.
         BATCH_SIZE = 20
-
         all_signals: Dict[str, Dict[str, Any]] = {}
 
         for batch in _chunk(tags, BATCH_SIZE):
@@ -276,17 +373,14 @@ async def _refresh_saih_cache_once():
                 signals = await asyncio.to_thread(fetch_saih_signals, batch)
                 all_signals.update(signals)
             except requests.HTTPError as e:
-                # Rate limit
                 if e.response is not None and e.response.status_code == 429:
                     await asyncio.sleep(60)
                 print("[SAIH ERROR batch HTTP]", repr(e))
             except Exception as e:
                 print("[SAIH ERROR batch]", repr(e))
 
-            # mini respiro entre batches
             await asyncio.sleep(0.2)
 
-        # Actualiza cache por sitio SIN machacar con None si no hay dato en esta ronda
         for s in SITES:
             sid = s["id"]
             nivel_tag = (s.get("saih") or {}).get("nivel", "") or ""
@@ -330,7 +424,6 @@ async def _push_to_clients_from_cache():
             ws_last_ts.pop(ws, None)
 
 async def poll_saih_loop():
-    # primera carga inmediata al arrancar
     await _refresh_saih_cache_once()
     await _push_to_clients_from_cache()
 
@@ -341,9 +434,7 @@ async def poll_saih_loop():
 
 async def poll_aemet_loop():
     """
-    Mantiene el cache fresco con TTL, para los sitios activos.
-    Aunque el refresco principal se hace "on demand" al cambiar de sitio,
-    este loop evita que se quede viejo con sesiones largas.
+    Mantiene el cache fresco con TTL para los sitios activos.
     """
     while True:
         try:
@@ -364,7 +455,6 @@ async def poll_aemet_loop():
                 if last_epoch is not None and (now_epoch - float(last_epoch)) < AEMET_REFRESH_SECONDS:
                     continue
 
-                # refresca respetando inflight
                 await refresh_aemet_for_site(sid, force=False)
 
         except Exception as e:
@@ -372,7 +462,23 @@ async def poll_aemet_loop():
 
         await asyncio.sleep(AEMET_CHECK_SECONDS)
 
+async def poll_ia_loop():
+    """
+    Refresca la predicción IA para los sitios activos.
+    No hace falta muy rápido: cada 5 min está bien.
+    """
+    while True:
+        try:
+            active_sites = set(ws_site.values())
+            for sid in active_sites:
+                await refresh_ia_for_site(sid)
+        except Exception as e:
+            print("[IA LOOP ERROR]", repr(e))
+
+        await asyncio.sleep(300)
+
 @app.on_event("startup")
 async def on_startup():
     asyncio.create_task(poll_saih_loop())
     asyncio.create_task(poll_aemet_loop())
+    asyncio.create_task(poll_ia_loop())
