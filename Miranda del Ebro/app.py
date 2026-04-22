@@ -1,3 +1,5 @@
+import traceback
+
 from dotenv import load_dotenv
 load_dotenv()
 
@@ -19,11 +21,7 @@ from aemet_opendata import (
     extract_prob_precip_summary,
 )
 
-# Predicción IA
-try:
-    from prediccion import predecir_semana
-except Exception:
-    predecir_semana = None
+from prediccion import predecir_semana
 
 
 # ---------------------------
@@ -132,8 +130,16 @@ def _ia_public_cache(site_id: str) -> Dict[str, Any]:
 
 def _load_dataset_modelo() -> pd.DataFrame:
     global _dataset_modelo_cache
+
     if _dataset_modelo_cache is None:
-        _dataset_modelo_cache = pd.read_csv("dataset_modelo.csv")
+        BASE_DIR = Path(__file__).resolve().parent
+        path = BASE_DIR / "salidas" / "dataset_modelo_final.csv"
+
+        print("📂 Cargando dataset:", path)
+        print("EXISTE:", path.exists())
+
+        _dataset_modelo_cache = pd.read_csv(path)
+
     return _dataset_modelo_cache
 
 def _build_payload(site_id: str, forced_is_new: Optional[bool] = None) -> Dict[str, Any]:
@@ -195,6 +201,7 @@ def _normalize_site_name_for_model(site_name: str) -> str:
     return mapping.get(site_name, site_name)
 
 async def refresh_ia_for_site(site_id: str) -> bool:
+    print("🚀 llamando a IA para:", site_id)
     """
     Calcula la predicción IA para el sitio actual usando el dataset unificado.
     """
@@ -238,6 +245,8 @@ async def refresh_ia_for_site(site_id: str) -> bool:
             "ia_error": repr(e),
             "pred_semana": [],
         }
+        print("📊 pred:", pred)
+        traceback.print_exc()
         return False
 
 async def refresh_aemet_for_site(site_id: str, force: bool = True) -> bool:

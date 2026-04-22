@@ -347,7 +347,7 @@
     <!-- IA -->
     <div class="card" style="margin-top: 14px;">
       <div class="row" style="justify-content: space-between;">
-        <h3 class="sectiontitle" style="margin:0;">Predicción IA (7 días)</h3>
+        <h3 class="sectiontitle" style="margin:0;">Predicción nivel y caudal (7 días)</h3>
         <div class="row">
           <span class="pill">IA refresco: <span id="iaRef" class="mono">-</span></span>
           <span class="pill">Estado IA: <span id="iaState" class="mono">-</span></span>
@@ -405,26 +405,37 @@
   const NIVEL_WARN = 2.0;
   const NIVEL_BAD  = 3.0;
 
+  const IA_WARN = 2.5;
+  const IA_BAD = 3.5;
+
   let predChart = null;
+  let ws = null;
+  let currentSite = null;
 
   function setConn(isUp) {
     connDot.className = "dot " + (isUp ? "ok" : "");
     connText.textContent = isUp ? "Conectado" : "Desconectado";
   }
 
-  function fmt(x, decimals=2) {
+  function fmt(x, decimals = 2) {
     if (x === null || x === undefined) return "-";
     const n = Number(x);
-    if (Number.isNaN(n)) return String(x);
+    if (Number.isNaN(n)) return "-";
     return n.toFixed(decimals);
   }
 
+  function toNum(value) {
+    const n = Number(value);
+    return Number.isFinite(n) ? n : null;
+  }
+
   function setEstadoRio(nivel) {
-    if (typeof nivel !== "number") {
+    if (typeof nivel !== "number" || !Number.isFinite(nivel)) {
       estadoDot.className = "dot";
       estadoTxt.textContent = "-";
       return;
     }
+
     if (nivel >= NIVEL_BAD) {
       estadoDot.className = "dot bad";
       estadoTxt.textContent = "ALTO (visual)";
@@ -447,16 +458,22 @@
   function setProbBars(v6, v24) {
     const c6 = clampProb(v6);
     const c24 = clampProb(v24);
+
     barP6.style.width = (c6 === null ? "0%" : `${c6}%`);
     barP24.style.width = (c24 === null ? "0%" : `${c24}%`);
   }
 
   function renderMmTable(list) {
     mmTable.innerHTML = "";
+
     if (!Array.isArray(list)) return;
+
     for (const row of list.slice(0, 12)) {
       const tr = document.createElement("tr");
-      tr.innerHTML = `<td class="mono">${row.hora ?? "-"}</td><td>${row.mm ?? "-"}</td>`;
+      tr.innerHTML = `
+        <td class="mono">${row?.hora ?? "-"}</td>
+        <td>${row?.mm ?? "-"}</td>
+      `;
       mmTable.appendChild(tr);
     }
   }
@@ -483,82 +500,179 @@
     }
   }
 
-  function updatePredChart(pred) {
-    const canvas = document.getElementById("predChart");
-    if (!canvas) return;
+  function limpiarPred(pred) {
+    if (!Array.isArray(pred)) return [];
 
-    if (!Array.isArray(pred) || pred.length === 0) {
-      if (predChart) {
-        predChart.destroy();
-        predChart = null;
-      }
-      return;
+    return pred
+      .map((p) => {
+        if (!Array.isArray(p) || p.length < 2) return null;
+
+        const nivel = toNum(p[0]);
+        const caudal = toNum(p[1]);
+
+        if (nivel === null && caudal === null) return null;
+
+        return [nivel, caudal];
+      })
+      .filter(Boolean);
+  }
+
+  function evaluarRiesgoIA(pred) {
+    const limpia = limpiarPred(pred);
+
+    if (limpia.length === 0) {
+      return { texto: "Sin datos", clase: "" };
     }
 
-    const labels = pred.map((_, i) => `Día ${i + 1}`);
-    const nivel = pred.map(p => Array.isArray(p) ? p[0] : null);
-    const caudal = pred.map(p => Array.isArray(p) ? p[1] : null);
+    let maxNivel = -Infinity;
+    let diaMax = -1;
 
+    limpia.forEach((p, i) => {
+      const nivel = p[0];
+      if (typeof nivel === "number" && nivel > maxNivel) {
+        maxNivel = nivel;
+        diaMax = i;
+      }
+    });
+
+    if (!Number.isFinite(maxNivel)) {
+      return { texto: "Sin datos", clase: "" };
+    }
+
+    if (maxNivel >= IA_BAD) {
+      return {
+        texto: `Riesgo alto en ${diaMax + 1} días`,
+        clase: "bad"
+      };
+    }
+
+    if (maxNivel >= IA_WARN) {
+      return {
+        texto: `Posible crecida en ${diaMax + 1} días`,
+        clase: "warn"
+      };
+    }
+
+    return {
+      texto: "Sin riesgo relevante",
+      clase: "ok"
+    };
+  }
+
+  function colorNivel(v) {
+    if (v === null || v === undefined || !Number.isFinite(v)) {
+      return "rgba(255,255,255,.35)";
+    }
+    if (v >= IA_BAD) return "#ef4444";
+    if (v >= IA_WARN) return "#f59e0b";
+    return "#22c55e";
+  }
+
+  function updatePredChart(pred) {
+  const canvas = document.getElementById("predChart");
+  if (!canvas) return;
+
+  const limpia = limpiarPred(pred);
+
+  if (limpia.length === 0) {
     if (predChart) predChart.destroy();
+    return;
+  }
 
-    predChart = new Chart(canvas, {
-      type: "line",
-      data: {
-        labels,
-        datasets: [
-          {
-            label: "Nivel (m)",
-            data: nivel,
-            tension: 0.25,
-            borderColor: "rgba(6,182,212,1)",
-            backgroundColor: "rgba(6,182,212,.15)",
-            yAxisID: "yNivel",
-          },
-          {
-            label: "Caudal (m³/s)",
-            data: caudal,
-            tension: 0.25,
-            borderColor: "rgba(124,58,237,1)",
-            backgroundColor: "rgba(124,58,237,.15)",
-            yAxisID: "yCaudal",
-          }
-        ]
+  const labels = limpia.map((_, i) => `Día ${i+1}`);
+
+  const nivel = limpia.map(p => p[0]);
+  const caudal = limpia.map(p => p[1]);
+
+  // 🔥 FILTRO DE VALORES EXTREMOS (MUY IMPORTANTE)
+  function clampArray(arr, min, max) {
+    return arr.map(v => {
+      if (v === null) return null;
+      return Math.max(min, Math.min(max, v));
+    });
+  }
+
+  const nivelClean = clampArray(nivel, 0, 10);     // niveles reales
+  const caudalClean = clampArray(caudal, 0, 2000); // ajusta a tu río
+
+  // 🔥 ESCALAS DINÁMICAS
+  const maxNivel = Math.max(...nivelClean.filter(v => v !== null));
+  const maxCaudal = Math.max(...caudalClean.filter(v => v !== null));
+
+  if (predChart) predChart.destroy();
+
+  predChart = new Chart(canvas, {
+    type: "line",
+    data: {
+      labels,
+      datasets: [
+        {
+          label: "Nivel (m)",
+          data: nivelClean,
+          borderWidth: 3,
+          tension: 0.35,
+          pointRadius: 5,
+          borderColor: "#22c55e",
+          yAxisID: "yNivel"
+        },
+        {
+          label: "Caudal (m³/s)",
+          data: caudalClean,
+          borderWidth: 2,
+          tension: 0.35,
+          borderDash: [6,6],
+          borderColor: "#7c3aed",
+          yAxisID: "yCaudal"
+        }
+      ]
+    },
+    options: {
+      responsive: true,
+      maintainAspectRatio: false,
+
+      plugins: {
+        legend: {
+          labels: { color: "white" }
+        }
       },
-      options: {
-        responsive: true,
-        maintainAspectRatio: false,
-        interaction: {
-          mode: "index",
-          intersect: false
-        },
-        plugins: {
-          legend: {
-            labels: {
-              color: "rgba(255,255,255,.9)"
-            }
+
+      scales: {
+        yNivel: {
+          type: "linear",
+          position: "left",
+          min: 0,
+          max: Math.ceil(maxNivel + 0.5),
+          ticks: {
+            color: "white",
+            callback: v => v.toFixed(1)
+          },
+          title: {
+            display: true,
+            text: "Nivel (m)",
+            color: "white"
           }
         },
-        scales: {
-          x: {
-            ticks: { color: "rgba(255,255,255,.7)" },
-            grid: { color: "rgba(255,255,255,.08)" }
+
+        yCaudal: {
+          type: "linear",
+          position: "right",
+          min: 0,
+          max: Math.ceil(maxCaudal * 1.2),
+          ticks: {
+            color: "white",
+            callback: v => Math.round(v)
           },
-          yNivel: {
-            type: "linear",
-            position: "left",
-            ticks: { color: "rgba(255,255,255,.7)" },
-            grid: { color: "rgba(255,255,255,.08)" }
-          },
-          yCaudal: {
-            type: "linear",
-            position: "right",
-            ticks: { color: "rgba(255,255,255,.7)" },
-            grid: { drawOnChartArea: false }
+          grid: { drawOnChartArea: false },
+          title: {
+            display: true,
+            text: "Caudal (m³/s)",
+            color: "white"
           }
         }
       }
-    });
-  }
+    }
+  });
+}
 
   function updateIAState(error, pred) {
     iaRef.textContent = window._lastIaRef ?? "-";
@@ -573,21 +687,33 @@
     iaErr.style.display = "none";
     iaErr.textContent = "";
 
-    if (Array.isArray(pred) && pred.length > 0) {
-      iaState.textContent = "Disponible";
+    const limpia = limpiarPred(pred);
+
+    if (limpia.length > 0) {
+      const riesgo = evaluarRiesgoIA(limpia);
+
+      if (riesgo.clase === "bad") {
+        iaState.textContent = "Riesgo alto";
+      } else if (riesgo.clase === "warn") {
+        iaState.textContent = "Vigilancia";
+      } else if (riesgo.clase === "ok") {
+        iaState.textContent = "Estable";
+      } else {
+        iaState.textContent = "Disponible";
+      }
     } else {
       iaState.textContent = "Sin datos";
     }
   }
 
-  let ws = null;
-  let currentSite = null;
-
   async function loadSites() {
     const res = await fetch("/api/sites");
     const sites = await res.json();
 
-    siteSelect.innerHTML = sites.map(s => `<option value="${s.id}">${s.name}</option>`).join("");
+    siteSelect.innerHTML = sites
+      .map(s => `<option value="${s.id}">${s.name}</option>`)
+      .join("");
+
     currentSite = sites[0]?.id ?? null;
 
     siteSelect.addEventListener("change", () => {
@@ -606,23 +732,30 @@
 
     ws.onopen = () => {
       setConn(true);
-      if (currentSite) ws.send(JSON.stringify({ type: "set_site", site: currentSite }));
+      if (currentSite) {
+        ws.send(JSON.stringify({ type: "set_site", site: currentSite }));
+      }
     };
+
     ws.onclose = () => setConn(false);
     ws.onerror = (e) => console.log("WS error", e);
 
     ws.onmessage = (ev) => {
       const data = JSON.parse(ev.data);
 
-      if (data.site_name) titleEl.textContent = `Dashboard Río Ebro – ${data.site_name}`;
+      if (data.site_name) {
+        titleEl.textContent = `Dashboard Río Ebro – ${data.site_name}`;
+      }
 
       sourceEl.textContent = data.source ?? "-";
       tsEl.textContent = data.ts ?? "-";
       refEl.textContent = data.refreshed_at ?? "-";
-      isNewEl.textContent = (data.is_new === true) ? "SI" : (data.is_new === false ? "NO" : "-");
+      isNewEl.textContent =
+        (data.is_new === true) ? "SI" :
+        (data.is_new === false) ? "NO" : "-";
 
-      const nivel = (typeof data.nivel_m === "number") ? data.nivel_m : null;
-      const caudal = (typeof data.caudal_m3s === "number") ? data.caudal_m3s : null;
+      const nivel = toNum(data.nivel_m);
+      const caudal = toNum(data.caudal_m3s);
 
       nivelEl.textContent = (nivel === null) ? "-" : fmt(nivel, 2);
       caudalEl.textContent = (caudal === null) ? "-" : fmt(caudal, 1);
@@ -643,19 +776,21 @@
         aemetErr.textContent = "";
       }
 
-      mm6sum.textContent = (data.aemet_mm_6h_sum ?? "-");
-      mm24sum.textContent = (data.aemet_mm_24h_sum ?? "-");
-      mm6max.textContent = (data.aemet_mm_6h_max ?? "-");
-      mm24max.textContent = (data.aemet_mm_24h_max ?? "-");
+      mm6sum.textContent = data.aemet_mm_6h_sum ?? "-";
+      mm24sum.textContent = data.aemet_mm_24h_sum ?? "-";
+      mm6max.textContent = data.aemet_mm_6h_max ?? "-";
+      mm24max.textContent = data.aemet_mm_24h_max ?? "-";
 
-      p6.textContent = (data.aemet_prob_6h_max ?? "-");
-      p24.textContent = (data.aemet_prob_24h_max ?? "-");
+      p6.textContent = data.aemet_prob_6h_max ?? "-";
+      p24.textContent = data.aemet_prob_24h_max ?? "-";
 
       setProbBars(data.aemet_prob_6h_max, data.aemet_prob_24h_max);
       renderMmTable(data.aemet_mm_next_hours);
       setRainState(data.aemet_mm_24h_sum, data.aemet_prob_24h_max);
 
       window._lastIaRef = data.ia_refreshed_at ?? "-";
+      console.log("IA ERROR:", data.ia_error);
+      console.log("IA PRED:", data.pred_semana);
       updateIAState(data.ia_error, data.pred_semana);
       updatePredChart(data.pred_semana);
     };

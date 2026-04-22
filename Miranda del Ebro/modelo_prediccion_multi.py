@@ -1,114 +1,133 @@
-import pandas as pd
-import numpy as np
+from __future__ import annotations
+
 import pickle
+from pathlib import Path
 
+import numpy as np
+import pandas as pd
 from sklearn.preprocessing import MinMaxScaler
-from tensorflow.keras.layers import LSTM, Dense, Input
-from tensorflow.keras.models import Model
 from tensorflow.keras.callbacks import EarlyStopping
+from tensorflow.keras.layers import LSTM, Dense, Dropout, Input
+from tensorflow.keras.models import Model
 
-# =========================
-# CONFIGURACIÓN
-# =========================
-DATASET_PATH = "dataset_modelo.csv"
-MODEL_PATH = "modelo_lstm.h5"
-SCALER_X_PATH = "scaler_X.pkl"
-SCALER_Y_PATH = "scaler_y.pkl"
+# =========================================================
+# CONFIG
+# =========================================================
+BASE_DIR = Path(__file__).resolve().parent
+DATASET_PATH = BASE_DIR / "salidas" / "dataset_modelo_final.csv"
+MODELOS_DIR = BASE_DIR / "modelos"
+MODELOS_DIR.mkdir(exist_ok=True)
 
-VENTANA = 7
+MODEL_PATH = MODELOS_DIR / "modelo_lstm.keras"
+SCALER_X_PATH = MODELOS_DIR / "scaler_X.pkl"
+SCALER_NIVEL_PATH = MODELOS_DIR / "scaler_nivel.pkl"
+SCALER_CAUDAL_PATH = MODELOS_DIR / "scaler_caudal.pkl"
+
+VENTANA = 14
 HORIZONTE = 7
+TRAIN_RATIO = 0.85
 
-# =========================
-# CARGA DE DATOS
-# =========================
-df = pd.read_csv(DATASET_PATH)
-df["fecha"] = pd.to_datetime(df["fecha"], errors="coerce")
-df = df.sort_values("fecha").reset_index(drop=True)
 
-features = ["nivel_m", "caudal_m3s", "lluvia_mm"] + [c for c in df.columns if c.startswith("municipio_")]
-targets = ["nivel_m", "caudal_m3s"]
+def crear_ventanas(data_x, target_nivel, target_caudal, ventana, horizonte):
+    X, y_nivel, y_caudal = [], [], []
 
-data_X = df[features].values
-data_y = df[targets].values
+    for i in range(len(data_x) - ventana - horizonte + 1):
+        X.append(data_x[i:i + ventana])
+        y_nivel.append(target_nivel[i + ventana:i + ventana + horizonte])
+        y_caudal.append(target_caudal[i + ventana:i + ventana + horizonte])
 
-def crear_ventanas(data, y, ventana=7, horizonte=7):
-    X, y_out = [], []
+    return np.array(X), np.array(y_nivel), np.array(y_caudal)
 
-    for i in range(len(data) - ventana - horizonte + 1):
-        X.append(data[i:i+ventana])
-        y_out.append(y[i+ventana:i+ventana+horizonte])
 
-    return np.array(X), np.array(y_out)
+def main():
+    df = pd.read_csv(DATASET_PATH)
+    df["fecha"] = pd.to_datetime(df["fecha"], errors="coerce")
+    df = df.sort_values("fecha").reset_index(drop=True)
 
-X, y = crear_ventanas(data_X, data_y, ventana=VENTANA, horizonte=HORIZONTE)
+    excluir = {"fecha", "nivel_m", "caudal_m3s", "desbordamiento"}
+    features = [c for c in df.columns if c not in excluir]
 
-# Salida: (muestras, 7, 2) -> (muestras, 14)
-y = y.reshape(y.shape[0], -1)
+    X_raw = df[features].values
+    y_nivel = df["nivel_m"].values
+    y_caudal = df["caudal_log"].values  # ya viene calculado
 
-print("X:", X.shape)
-print("y:", y.shape)
+    X, y_nivel, y_caudal = crear_ventanas(
+        X_raw, y_nivel, y_caudal, VENTANA, HORIZONTE
+    )
 
-# =========================
-# TRAIN / TEST
-# =========================
-train_size = int(len(X) * 0.8)
+    if len(X) == 0:
+        raise RuntimeError("No se pudieron crear ventanas. Revisa el dataset.")
 
-X_train, X_test = X[:train_size], X[train_size:]
-y_train, y_test = y[:train_size], y[train_size:]
+    train_size = int(len(X) * TRAIN_RATIO)
 
-# =========================
-# ESCALADO
-# =========================
-scaler_X = MinMaxScaler()
-scaler_y = MinMaxScaler()
+    X_train, X_test = X[:train_size], X[train_size:]
+    y_nivel_train, y_nivel_test = y_nivel[:train_size], y_nivel[train_size:]
+    y_caudal_train, y_caudal_test = y_caudal[:train_size], y_caudal[train_size:]
 
-X_train_2d = X_train.reshape(-1, X_train.shape[2])
-X_test_2d = X_test.reshape(-1, X_test.shape[2])
+    scaler_X = MinMaxScaler()
+    scaler_nivel = MinMaxScaler()
+    scaler_caudal = MinMaxScaler()
 
-X_train_scaled = scaler_X.fit_transform(X_train_2d).reshape(X_train.shape)
-X_test_scaled = scaler_X.transform(X_test_2d).reshape(X_test.shape)
+    X_train_2d = X_train.reshape(-1, X_train.shape[2])
+    X_test_2d = X_test.reshape(-1, X_test.shape[2])
 
-y_train_scaled = scaler_y.fit_transform(y_train)
-y_test_scaled = scaler_y.transform(y_test)
+    X_train_scaled = scaler_X.fit_transform(X_train_2d).reshape(X_train.shape)
+    X_test_scaled = scaler_X.transform(X_test_2d).reshape(X_test.shape)
 
-# =========================
-# MODELO
-# =========================
-input_hist = Input(shape=(VENTANA, X.shape[2]), name="historial")
-x = LSTM(64)(input_hist)
-x = Dense(64, activation="relu")(x)
-output = Dense(HORIZONTE * 2, name="salida")(x)
+    y_nivel_train_scaled = scaler_nivel.fit_transform(y_nivel_train)
+    y_nivel_test_scaled = scaler_nivel.transform(y_nivel_test)
 
-modelo = Model(inputs=input_hist, outputs=output)
-modelo.compile(optimizer="adam", loss="mse")
+    y_caudal_train_scaled = scaler_caudal.fit_transform(y_caudal_train)
+    y_caudal_test_scaled = scaler_caudal.transform(y_caudal_test)
 
-modelo.summary()
+    inp = Input(shape=(VENTANA, X.shape[2]))
+    x = LSTM(128, return_sequences=True)(inp)
+    x = Dropout(0.2)(x)
+    x = LSTM(64)(x)
+    x = Dense(64, activation="relu")(x)
 
-early_stopping = EarlyStopping(
-    monitor="val_loss",
-    patience=10,
-    restore_best_weights=True
-)
+    out_nivel = Dense(HORIZONTE, name="nivel")(x)
+    out_caudal = Dense(HORIZONTE, name="caudal")(x)
 
-modelo.fit(
-    X_train_scaled,
-    y_train_scaled,
-    validation_data=(X_test_scaled, y_test_scaled),
-    epochs=50,
-    batch_size=32,
-    callbacks=[early_stopping],
-    verbose=1
-)
+    modelo = Model(inputs=inp, outputs=[out_nivel, out_caudal])
 
-# =========================
-# GUARDADO
-# =========================
-modelo.save(MODEL_PATH)
+    modelo.compile(
+        optimizer="adam",
+        loss={"nivel": "mse", "caudal": "mse"},
+    )
 
-with open(SCALER_X_PATH, "wb") as f:
-    pickle.dump(scaler_X, f)
+    early_stopping = EarlyStopping(
+        monitor="val_loss",
+        patience=12,
+        restore_best_weights=True,
+    )
 
-with open(SCALER_Y_PATH, "wb") as f:
-    pickle.dump(scaler_y, f)
+    modelo.fit(
+        X_train_scaled,
+        {"nivel": y_nivel_train_scaled, "caudal": y_caudal_train_scaled},
+        validation_data=(
+            X_test_scaled,
+            {"nivel": y_nivel_test_scaled, "caudal": y_caudal_test_scaled},
+        ),
+        epochs=100,
+        batch_size=32,
+        callbacks=[early_stopping],
+        verbose=1,
+    )
 
-print("✅ Modelo y scalers guardados correctamente")
+    modelo.save(MODEL_PATH)
+
+    with open(SCALER_X_PATH, "wb") as f:
+        pickle.dump(scaler_X, f)
+
+    with open(SCALER_NIVEL_PATH, "wb") as f:
+        pickle.dump(scaler_nivel, f)
+
+    with open(SCALER_CAUDAL_PATH, "wb") as f:
+        pickle.dump(scaler_caudal, f)
+
+    print(f"Modelo guardado en: {MODEL_PATH}")
+
+
+if __name__ == "__main__":
+    main()
