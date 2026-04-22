@@ -105,18 +105,6 @@ def predecir_semana(df: pd.DataFrame, site_name: str = None) -> list[list[float]
     try:
         dataset_path = BASE_DIR / "salidas" / "dataset_modelo_final.csv"
 
-        print("BASE_DIR:", BASE_DIR)
-        print("DATASET_PATH:", dataset_path)
-        print("EXISTE DATASET:", dataset_path.exists())
-        print("MODEL_PATH:", MODEL_PATH)
-        print("EXISTE MODELO:", MODEL_PATH.exists())
-        print("SCALER_X_PATH:", SCALER_X_PATH)
-        print("EXISTE SCALER_X:", SCALER_X_PATH.exists())
-        print("SCALER_NIVEL_PATH:", SCALER_NIVEL_PATH)
-        print("EXISTE SCALER_NIVEL:", SCALER_NIVEL_PATH.exists())
-        print("SCALER_CAUDAL_PATH:", SCALER_CAUDAL_PATH)
-        print("EXISTE SCALER_CAUDAL:", SCALER_CAUDAL_PATH.exists())
-
         df = pd.read_csv(dataset_path)
 
         if site_name:
@@ -127,8 +115,8 @@ def predecir_semana(df: pd.DataFrame, site_name: str = None) -> list[list[float]
         excluir = {"fecha", "nivel_m", "caudal_m3s", "desbordamiento"}
         features = [c for c in df.columns if c not in excluir]
 
-        print("N_FEATURES_PRED:", len(features))
-        print("FEATURES_PRED:", features[:10], "...")
+        #print("N_FEATURES_PRED:", len(features))
+        #print("FEATURES_PRED:", features[:10], "...")
 
         if len(df) < VENTANA:
             print("⚠️ No hay suficientes datos")

@@ -14,8 +14,8 @@ import pandas as pd
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect
 from fastapi.responses import HTMLResponse, JSONResponse
 
-from saih_opendata import fetch_saih_signals
-from aemet_opendata import (
+from api.saih_opendata import fetch_saih_signals
+from api.aemet_opendata import (
     fetch_aemet_municipio_horaria,
     extract_rain_forecast_mm,
     extract_prob_precip_summary,
@@ -245,7 +245,7 @@ async def refresh_ia_for_site(site_id: str) -> bool:
             "ia_error": repr(e),
             "pred_semana": [],
         }
-        print("📊 pred:", pred)
+        
         traceback.print_exc()
         return False
 
