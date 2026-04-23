@@ -1,7 +1,7 @@
 import json
 from pathlib import Path
 
-BASE_DIR = Path(__file__).resolve().parent.parent
+BASE_DIR = Path(__file__).resolve().parents[1]
 SITES = json.loads((BASE_DIR / "sites.json").read_text(encoding="utf-8"))
 
 import os
