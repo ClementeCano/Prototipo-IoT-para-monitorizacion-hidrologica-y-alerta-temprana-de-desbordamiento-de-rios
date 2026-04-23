@@ -1,4 +1,3 @@
-from apscheduler.schedulers.background import BackgroundScheduler
 import time
 from datetime import datetime
 
