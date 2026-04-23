@@ -16,6 +16,9 @@ primary_region = 'cdg'
   min_machines_running = 0
   processes = ['app']
 
+  [processes]
+app = "python app/scheduler.py"
+
 [[vm]]
   memory = '1gb'
   cpus = 1

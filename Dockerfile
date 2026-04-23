@@ -11,4 +11,4 @@ COPY . .
 RUN pip install --no-cache-dir -r requirements.txt
 
 # Comando por defecto
-CMD ["python", "Miranda del Ebro/scheduler.py"]
+CMD ["python", "app/scheduler.py"]
