@@ -4,6 +4,12 @@ from pathlib import Path
 BASE_DIR = Path(__file__).resolve().parent.parent
 SITES = json.loads((BASE_DIR / "sites.json").read_text(encoding="utf-8"))
 
+import os
+
+print("📂 CONTENIDO /app:")
+for root, dirs, files in os.walk("/app"):
+    print(root, files)
+
 def collect_all_tags():
     tags = []
 
