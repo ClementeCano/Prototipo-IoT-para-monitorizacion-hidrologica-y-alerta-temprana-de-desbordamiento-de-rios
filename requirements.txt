@@ -8,7 +8,6 @@ tensorflow==2.21.0
 
 requests==2.32.5
 python-dotenv==1.2.1
-
 psycopg2-binary==2.9.12
 
 openpyxl==3.1.5

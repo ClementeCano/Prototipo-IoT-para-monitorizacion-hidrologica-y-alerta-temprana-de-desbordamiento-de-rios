@@ -76,12 +76,15 @@ def job():
             print(f"❌ Error AEMET en {municipio}:", e)
 
 
-scheduler = BackgroundScheduler()
-scheduler.add_job(job, 'interval', hours=1)
-scheduler.start()
+# scheduler = BackgroundScheduler()
+# scheduler.add_job(job, 'interval', hours=1)
+# scheduler.start()
 
-print("✅ Scheduler iniciado")
 
-# Mantener vivo
-while True:
-    time.sleep(60)
+def main():
+    job()
+    print("✅ Job finalizado correctamente")
+
+
+if __name__ == "__main__":
+    main()
