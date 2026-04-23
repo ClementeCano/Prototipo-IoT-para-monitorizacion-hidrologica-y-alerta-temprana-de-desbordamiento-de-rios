@@ -17,7 +17,7 @@ primary_region = 'cdg'
   processes = ['app']
 
 [processes]
-  app = "python app/scheduler.py"
+  app = "python ./app/scheduler.py"
 
 [[vm]]
   memory = '1gb'
