@@ -22,7 +22,7 @@ from api.aemet_opendata import (
 )
 
 from prediccion import predecir_semana
-
+from core.config import SITES
 
 # ---------------------------
 # Config
@@ -36,7 +36,6 @@ AEMET_CHECK_SECONDS = 60
 
 app = FastAPI()
 
-SITES = json.loads(Path("sites.json").read_text(encoding="utf-8"))
 SITES_BY_ID = {s["id"]: s for s in SITES}
 
 # Cache simple del dataset para IA
@@ -166,25 +165,6 @@ def _build_payload(site_id: str, forced_is_new: Optional[bool] = None) -> Dict[s
         **_ia_public_cache(site_id),
     }
     return payload
-
-def _collect_all_tags() -> list[str]:
-    """Prefetch de TODOS los sitios: cambio instantáneo sin esperar tick."""
-    tags: list[str] = []
-    for s in SITES:
-        nivel = (s.get("saih") or {}).get("nivel", "") or ""
-        caudal = (s.get("saih") or {}).get("caudal", "") or ""
-        if nivel:
-            tags.append(nivel)
-        if caudal:
-            tags.append(caudal)
-
-    out: list[str] = []
-    seen = set()
-    for t in tags:
-        if t not in seen:
-            out.append(t)
-            seen.add(t)
-    return out
 
 def _chunk(lst: list[str], n: int) -> list[list[str]]:
     return [lst[i:i+n] for i in range(0, len(lst), n)]

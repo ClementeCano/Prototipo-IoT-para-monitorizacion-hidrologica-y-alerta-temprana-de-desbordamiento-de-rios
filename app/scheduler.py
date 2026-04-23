@@ -9,7 +9,7 @@ from api.aemet_opendata import (
     extract_prob_precip_summary,
     extract_rain_forecast_mm
 )
-from app import _collect_all_tags, SITES
+from core.config import collect_all_tags, SITES
 
 
 def job():
@@ -22,7 +22,7 @@ def job():
     # 🔹 SAIH
     # =========================
     try:
-        tags = _collect_all_tags()
+        tags = collect_all_tags()
         datos_saih = fetch_saih_signals(tags)
 
         for site in SITES:
