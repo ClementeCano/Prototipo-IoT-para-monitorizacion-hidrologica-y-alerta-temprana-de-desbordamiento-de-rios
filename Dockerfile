@@ -13,4 +13,4 @@ RUN pip install --no-cache-dir -r requirements.txt
 COPY . .
 
 # Comando por defecto
-CMD ["python", "/app/app/scheduler.py"]
+CMD ["python", "-u", "/app/app/scheduler.py"]
