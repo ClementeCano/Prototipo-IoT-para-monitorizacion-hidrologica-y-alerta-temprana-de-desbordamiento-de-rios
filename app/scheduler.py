@@ -80,10 +80,20 @@ def job():
 # scheduler.add_job(job, 'interval', hours=1)
 # scheduler.start()
 
-
 def main():
-    job()
-    print("✅ Job finalizado correctamente")
+    print("🚀 Scheduler iniciado")
+
+    while True:
+        try:
+            print("📡 Ejecutando job...")
+            job()
+            print("✅ Job finalizado correctamente")
+
+        except Exception as e:
+            print("❌ Error en ejecución:", e)
+
+        print("⏳ Esperando 1 hora...\n")
+        time.sleep(3600)  # 1 hora
 
 
 if __name__ == "__main__":
