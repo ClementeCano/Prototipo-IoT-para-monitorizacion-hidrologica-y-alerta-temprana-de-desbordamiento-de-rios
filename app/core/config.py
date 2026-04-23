@@ -1,7 +1,8 @@
 import json
 from pathlib import Path
 
-SITES = json.loads(Path("sites.json").read_text(encoding="utf-8"))
+BASE_DIR = Path(__file__).resolve().parent
+SITES = json.loads((BASE_DIR / "sites.json").read_text(encoding="utf-8"))
 
 def collect_all_tags():
     tags = []
