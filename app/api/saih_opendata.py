@@ -50,11 +50,10 @@ def _build_session() -> requests.Session:
 
 _SESSION = _build_session()
 
-urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
-
 
 def _safe_get(url: str, params: dict, timeout=(6, 20)):
     last_error = None
+    print("🔥 SAIH SIN SSL ACTIVADO")
 
     for attempt in range(1, 4):
         try:

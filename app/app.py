@@ -22,7 +22,7 @@ from api.aemet_opendata import (
 )
 
 from prediccion import predecir_semana
-from core.config import SITES
+from core.config import SITES, collect_all_tags
 
 # ---------------------------
 # Config
@@ -350,7 +350,7 @@ async def _refresh_saih_cache_once():
     Además, si un batch falla, no machacamos el cache con None: conservamos el último dato válido.
     """
     try:
-        tags = _collect_all_tags()
+        tags = collect_all_tags()
         if not tags:
             return
 
