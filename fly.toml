@@ -6,6 +6,9 @@
 app = 'schedule-ebro'
 primary_region = 'cdg'
 
+auto_stop_machines = false
+min_machines_running = 1
+
 
 [[vm]]
   memory = '1gb'
