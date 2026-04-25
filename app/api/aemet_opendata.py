@@ -1,8 +1,13 @@
 import os
-import requests
+import time
 from datetime import datetime, timedelta
-from zoneinfo import ZoneInfo
 from typing import Any, Dict, List, Optional, Tuple
+from zoneinfo import ZoneInfo
+
+import certifi
+import requests
+from requests.adapters import HTTPAdapter
+from urllib3.util.retry import Retry
 
 # Opcional: en algunos Windows evita problemas de certificados
 try:
@@ -15,14 +20,60 @@ BASE = "https://opendata.aemet.es/opendata/api"
 TZ = ZoneInfo("Europe/Madrid")
 
 
-def _get_json(url: str, timeout: int = 30):
-    r = requests.get(
-        url,
-        timeout=timeout,
-        headers={"Accept": "application/json", "User-Agent": "Mozilla/5.0"},
+def _build_session() -> requests.Session:
+    session = requests.Session()
+
+    retries = Retry(
+        total=3,
+        connect=3,
+        read=3,
+        backoff_factor=1.5,
+        status_forcelist=[429, 500, 502, 503, 504],
+        allowed_methods=["GET"],
+        raise_on_status=False,
     )
-    r.raise_for_status()
-    return r.json()
+
+    adapter = HTTPAdapter(max_retries=retries)
+    session.mount("https://", adapter)
+    session.mount("http://", adapter)
+
+    session.headers.update(
+        {
+            "Accept": "application/json",
+            "User-Agent": "Mozilla/5.0",
+        }
+    )
+    return session
+
+
+_SESSION = _build_session()
+
+
+def _get_json(url: str, timeout: int = 60, pause_before_retry: float = 1.0):
+    last_error = None
+
+    for attempt in range(1, 4):
+        try:
+            r = _SESSION.get(
+                url,
+                timeout=timeout,
+                verify=certifi.where(),
+            )
+            r.raise_for_status()
+            return r.json()
+
+        except requests.exceptions.SSLError as e:
+            last_error = RuntimeError(f"Error SSL al conectar con {url}: {e}")
+            break
+
+        except requests.exceptions.RequestException as e:
+            last_error = e
+            if attempt < 3:
+                time.sleep(pause_before_retry * attempt)
+            else:
+                break
+
+    raise RuntimeError(f"Fallo al pedir JSON a {url}: {last_error}")
 
 
 def fetch_aemet_municipio_horaria(municipio: str) -> List[Dict[str, Any]]:
@@ -31,15 +82,16 @@ def fetch_aemet_municipio_horaria(municipio: str) -> List[Dict[str, Any]]:
         raise RuntimeError("Falta AEMET_APIKEY (en .env o variable de entorno).")
 
     url = f"{BASE}/prediccion/especifica/municipio/horaria/{municipio}?api_key={api_key}"
-    meta = _get_json(url)
+    meta = _get_json(url, timeout=60)
 
     datos_url = meta.get("datos")
     if not datos_url:
         raise RuntimeError(f"Respuesta AEMET sin 'datos': {meta}")
 
-    data = _get_json(datos_url)
+    data = _get_json(datos_url, timeout=60)
     if not isinstance(data, list):
         raise RuntimeError(f"Formato AEMET inesperado (no list): {type(data)}")
+
     return data
 
 
@@ -49,7 +101,7 @@ def _to_float_mm(x) -> float:
     s = str(x).strip()
     if s == "" or s.lower() == "null":
         return 0.0
-    if s.lower() == "ip":  # inapreciable
+    if s.lower() == "ip":
         return 0.0
     try:
         return float(s.replace(",", "."))
@@ -74,14 +126,12 @@ def _parse_periodo_to_interval(fecha_iso: str, periodo: str) -> Optional[Tuple[d
 
     periodo = str(periodo).strip()
 
-    # "HH"
     if len(periodo) == 2 and periodo.isdigit():
         h = int(periodo)
         start = base_date.replace(hour=h)
         end = start + timedelta(hours=1) - timedelta(seconds=1)
         return start, end
 
-    # "HH-HH"
     if "-" in periodo:
         a, b = periodo.split("-", 1)
         a = a.strip()
@@ -95,7 +145,6 @@ def _parse_periodo_to_interval(fecha_iso: str, periodo: str) -> Optional[Tuple[d
                 end = (base_date + timedelta(days=1)).replace(hour=h2) - timedelta(seconds=1)
             return start, end
 
-    # "HHHH" (1319)
     if len(periodo) == 4 and periodo.isdigit():
         h1 = int(periodo[:2])
         h2 = int(periodo[2:])
@@ -108,7 +157,11 @@ def _parse_periodo_to_interval(fecha_iso: str, periodo: str) -> Optional[Tuple[d
     return None
 
 
-def extract_rain_forecast_mm(aemet_data: List[Dict[str, Any]], hours_ahead: int = 24, list_hours: int = 12) -> Dict[str, Any]:
+def extract_rain_forecast_mm(
+    aemet_data: List[Dict[str, Any]],
+    hours_ahead: int = 24,
+    list_hours: int = 12,
+) -> Dict[str, Any]:
     now = datetime.now(TZ)
     limit_6h = now + timedelta(hours=6)
     limit_24h = now + timedelta(hours=hours_ahead)
@@ -148,7 +201,13 @@ def extract_rain_forecast_mm(aemet_data: List[Dict[str, Any]], hours_ahead: int 
             periodo = str(p.get("periodo", "")).strip()
             if len(periodo) == 2 and periodo.isdigit():
                 hour = int(periodo)
-                dt = datetime.fromisoformat(fecha).replace(tzinfo=TZ, hour=hour, minute=0, second=0)
+                dt = datetime.fromisoformat(fecha).replace(
+                    tzinfo=TZ,
+                    hour=hour,
+                    minute=0,
+                    second=0,
+                    microsecond=0,
+                )
                 if dt >= now:
                     series.append((dt, _to_float_mm(p.get("value"))))
 
@@ -156,7 +215,11 @@ def extract_rain_forecast_mm(aemet_data: List[Dict[str, Any]], hours_ahead: int 
 
     mm_6 = [mm for (dt, mm) in series if dt <= limit_6h]
     mm_24 = [mm for (dt, mm) in series if dt <= limit_24h]
-    mm_list = [{"hora": dt.strftime("%Y-%m-%d %H:%M"), "mm": round(mm, 2)} for (dt, mm) in series if dt <= limit_list]
+    mm_list = [
+        {"hora": dt.strftime("%Y-%m-%d %H:%M"), "mm": round(mm, 2)}
+        for (dt, mm) in series
+        if dt <= limit_list
+    ]
 
     return {
         "aemet_mm_6h_sum": round(sum(mm_6), 2) if mm_6 else 0.0,
@@ -167,7 +230,10 @@ def extract_rain_forecast_mm(aemet_data: List[Dict[str, Any]], hours_ahead: int 
     }
 
 
-def extract_prob_precip_summary(aemet_data: List[Dict[str, Any]], hours_ahead: int = 24) -> Dict[str, Optional[int]]:
+def extract_prob_precip_summary(
+    aemet_data: List[Dict[str, Any]],
+    hours_ahead: int = 24,
+) -> Dict[str, Optional[int]]:
     now = datetime.now(TZ)
     limit_6h = now + timedelta(hours=6)
     limit_24h = now + timedelta(hours=hours_ahead)
@@ -201,6 +267,7 @@ def extract_prob_precip_summary(aemet_data: List[Dict[str, Any]], hours_ahead: i
             interval = _parse_periodo_to_interval(fecha, str(p.get("periodo")))
             if not interval:
                 continue
+
             start, end = interval
 
             if end >= now and start <= limit_6h:
