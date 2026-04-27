@@ -2,6 +2,7 @@ from pathlib import Path
 import pandas as pd
 import numpy as np
 import pickle
+import matplotlib.pyplot as plt
 
 from sklearn.metrics import mean_absolute_error, mean_squared_error
 from tensorflow.keras.models import load_model
@@ -11,6 +12,7 @@ from tensorflow.keras.models import load_model
 # =========================
 # Carpeta base del script actual
 BASE_DIR = Path(__file__).resolve().parent
+(BASE_DIR / "graficas").mkdir(exist_ok=True)
 
 # =========================
 # RUTAS
@@ -178,3 +180,170 @@ for i, col in enumerate(municipios_cols):
     print(f"{col.replace('municipio_', '')}:")
     print(f"   Nivel MAE={mae_n:.4f}")
     print(f"   Caudal MAE={mae_c:.4f}")
+
+# =========================
+# GRÁFICA GLOBAL (NIVEL)
+# =========================
+
+# usamos solo el primer día del horizonte (más interpretable)
+y_real_plot = y_nivel_test[:, 0]
+y_pred_plot = pred_nivel[:, 0]
+
+plt.figure(figsize=(12,6))
+plt.plot(y_real_plot, label="Real")
+plt.plot(y_pred_plot, label="Predicción")
+
+plt.title(f"Nivel del río (Día +1)\nMAE={mae_nivel:.3f} | RMSE={rmse_nivel:.3f}")
+plt.xlabel("Muestras")
+plt.ylabel("Nivel (m)")
+plt.legend()
+plt.grid()
+
+plt.savefig(BASE_DIR / "graficas" / "graficas_nivel.png")
+plt.show()
+
+
+# =========================
+# SCATTER (NIVEL)
+# =========================
+
+plt.figure(figsize=(6,6))
+
+plt.scatter(y_real_plot, y_pred_plot, alpha=0.5)
+
+# línea perfecta
+min_val = min(y_real_plot.min(), y_pred_plot.min())
+max_val = max(y_real_plot.max(), y_pred_plot.max())
+
+plt.plot([min_val, max_val], [min_val, max_val])
+
+plt.xlabel("Real")
+plt.ylabel("Predicción")
+plt.title("Scatter Nivel (Real vs Predicho)")
+plt.grid()
+
+plt.savefig(BASE_DIR / "graficas" / "scatter_nivel.png")
+plt.show()
+
+# =========================
+# PICOS (DESBORDAMIENTO)
+# =========================
+
+UMBRAL = 3.0  # ajusta a tu caso
+
+mask = y_real_plot > UMBRAL
+
+if np.sum(mask) > 0:
+    plt.figure(figsize=(12,6))
+
+    plt.plot(y_real_plot[mask], label="Real (picos)")
+    plt.plot(y_pred_plot[mask], label="Predicción (picos)")
+
+    plt.title("Predicción en zonas críticas (picos)")
+    plt.legend()
+    plt.grid()
+
+    plt.savefig(BASE_DIR / "graficas" / "picos_nivel.png")
+    plt.show()
+
+# =========================
+# ERROR EN EL TIEMPO
+# =========================
+
+error = y_real_plot - y_pred_plot
+
+plt.figure(figsize=(12,4))
+plt.plot(error)
+plt.axhline(0)
+
+plt.title("Error en el tiempo (Nivel)")
+plt.xlabel("Muestras")
+plt.ylabel("Error")
+plt.grid()
+
+plt.savefig(BASE_DIR / "graficas" / "error_nivel.png")
+plt.show()
+
+
+# =========================
+# GRÁFICA GLOBAL (CAUDAL)
+# =========================
+
+y_real_caudal_plot = y_caudal_real[:, 0]
+y_pred_caudal_plot = pred_caudal[:, 0]
+
+plt.figure(figsize=(12,6))
+plt.plot(y_real_caudal_plot, label="Real")
+plt.plot(y_pred_caudal_plot, label="Predicción")
+
+plt.title(f"Caudal del río (Día +1)\nMAE={mae_caudal:.3f} | RMSE={rmse_caudal:.3f}")
+plt.xlabel("Muestras")
+plt.ylabel("Caudal (m3/s)")
+plt.legend()
+plt.grid()
+
+plt.savefig(BASE_DIR / "graficas" / "grafica_caudal.png")
+plt.show()
+
+
+# =========================
+# SCATTER (CAUDAL)
+# =========================
+
+plt.figure(figsize=(6,6))
+
+plt.scatter(y_real_caudal_plot, y_pred_caudal_plot, alpha=0.5)
+
+min_val = min(y_real_caudal_plot.min(), y_pred_caudal_plot.min())
+max_val = max(y_real_caudal_plot.max(), y_pred_caudal_plot.max())
+
+plt.plot([min_val, max_val], [min_val, max_val])
+
+plt.xlabel("Real")
+plt.ylabel("Predicción")
+plt.title("Scatter Caudal (Real vs Predicho)")
+plt.grid()
+
+plt.savefig(BASE_DIR / "graficas" / "scatter_caudal.png")
+plt.show()
+
+
+# =========================
+# PICOS (CAUDAL)
+# =========================
+
+umbral_caudal = np.percentile(y_real_caudal_plot, 90)
+
+mask_caudal = y_real_caudal_plot > umbral_caudal
+
+if np.sum(mask_caudal) > 0:
+    plt.figure(figsize=(12,6))
+
+    plt.plot(y_real_caudal_plot[mask_caudal], label="Real (picos)")
+    plt.plot(y_pred_caudal_plot[mask_caudal], label="Predicción (picos)")
+
+    plt.title("Predicción en picos de caudal")
+    plt.legend()
+    plt.grid()
+
+    plt.savefig(BASE_DIR / "graficas" / "picos_caudal.png")
+    plt.show()
+
+
+# =========================
+# ERROR EN EL TIEMPO (CAUDAL)
+# =========================
+
+error_caudal = y_real_caudal_plot - y_pred_caudal_plot
+
+plt.figure(figsize=(12,4))
+plt.plot(error_caudal)
+plt.axhline(0)
+
+plt.title("Error en el tiempo (Caudal)")
+plt.xlabel("Muestras")
+plt.ylabel("Error")
+plt.grid()
+
+plt.savefig(BASE_DIR / "graficas" / "error_caudal.png")
+plt.show()

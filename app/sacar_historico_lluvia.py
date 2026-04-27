@@ -28,7 +28,7 @@ OUTPUT_DIR = BASE_DIR / "datos_lluvia_aemet"
 OUTPUT_DIR.mkdir(exist_ok=True)
 
 FECHA_INICIO = "2020-01-01"
-FECHA_FIN = "2026-01-31"
+FECHA_FIN = "2026-04-26"
 
 TIMEOUT = 30
 MAX_RETRIES = 6
