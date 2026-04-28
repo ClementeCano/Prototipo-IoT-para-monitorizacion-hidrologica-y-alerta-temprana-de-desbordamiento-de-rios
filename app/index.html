@@ -66,8 +66,12 @@
     grid-template-columns: 1fr;
     gap: 14px;
   }
-  @media (min-width: 980px){
-    .topgrid{ grid-template-columns: 1.25fr 0.75fr; }
+
+  @media (min-width: 1100px){
+    .topgrid{
+      grid-template-columns: 0.9fr 1.1fr;
+      align-items: stretch;
+    }
   }
 
   .card{
@@ -245,6 +249,15 @@
     height: 320px;
     position: relative;
   }
+
+  .card{
+    display: flex;
+    flex-direction: column;
+  }
+
+  #map{
+    flex: 1;
+  }
 </style>
 </head>
 
@@ -292,6 +305,11 @@
             * Estado visual por umbral simple de nivel.
           </div>
         </div>
+      </div>
+
+      <div class="card" style="margin-top:14px;">
+        <h3 class="sectiontitle">Mapa de municipios</h3>
+        <div id="map" style="height: 60vh; min-height: 450px; border-radius: 12px;"></div>
       </div>
 
       <!-- DERECHA -->
@@ -364,10 +382,7 @@
     </div>
 
   
-    <div class="card" style="margin-top:14px;">
-      <h3 class="sectiontitle">Mapa de municipios</h3>
-      <div id="map" style="height: 60vh; min-height: 450px; border-radius: 12px;"></div>
-    </div>
+    
   </div>
 
 <script>
