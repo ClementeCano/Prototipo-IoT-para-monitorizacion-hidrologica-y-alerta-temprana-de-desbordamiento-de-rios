@@ -1,3 +1,9 @@
+import os
+os.environ["TF_ENABLE_ONEDNN_OPTS"] = "0"
+os.environ["TF_CPP_MIN_LOG_LEVEL"] = "2" 
+import absl.logging
+absl.logging.set_verbosity(absl.logging.ERROR)
+
 from pathlib import Path
 import numpy as np
 import pandas as pd

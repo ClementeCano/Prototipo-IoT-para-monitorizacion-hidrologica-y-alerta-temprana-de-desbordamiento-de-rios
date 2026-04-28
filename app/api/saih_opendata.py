@@ -45,6 +45,9 @@ def _build_session() -> requests.Session:
         "User-Agent": "Mozilla/5.0",
     })
 
+    # ✅ AQUÍ está la clave
+    session.verify = certifi.where()
+
     return session
 
 
@@ -53,7 +56,7 @@ _SESSION = _build_session()
 
 def _safe_get(url: str, params: dict, timeout=(6, 20)):
     last_error = None
-    print("🔥 SAIH SIN SSL ACTIVADO")
+    #print("🔥 SAIH CON SSL ACTIVADO")
 
     for attempt in range(1, 4):
         try:
@@ -61,7 +64,6 @@ def _safe_get(url: str, params: dict, timeout=(6, 20)):
                 url,
                 params=params,
                 timeout=timeout,
-                verify=False,  # 🔥 aquí
             )
             r.raise_for_status()
             return r.json()

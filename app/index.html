@@ -5,8 +5,12 @@
   <meta name="viewport" content="width=device-width, initial-scale=1"/>
   <title>TFG Río Ebro – Tiempo real</title>
   <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+
   <link rel="stylesheet" href="https://unpkg.com/leaflet/dist/leaflet.css" />
   <script src="https://unpkg.com/leaflet/dist/leaflet.js"></script>
+
+  <script src="https://www.gstatic.com/firebasejs/10.12.2/firebase-app-compat.js"></script>
+  <script src="https://www.gstatic.com/firebasejs/10.12.2/firebase-messaging-compat.js"></script>
 <style>
   :root{
     --bg0:#05070d;
@@ -262,6 +266,9 @@
 </head>
 
 <body>
+  <button onclick="initNotifications()" class="pill">
+    Activar alertas 🔔
+  </button>
   <div class="layout">
     <h1 id="title">Dashboard Río Ebro</h1>
     <div class="muted">Selecciona un lugar y verás nivel/caudal (SAIH), lluvia (AEMET) y una predicción IA de una semana.</div>
@@ -385,7 +392,24 @@
     
   </div>
 
+  
+
 <script>
+
+  const firebaseConfig = {
+    apiKey: "AIzaSyCXNKG8wb5IsTLaL6WLPIiRCPtuF4MIlLo",
+    authDomain: "rio-ebro.firebaseapp.com",
+    projectId: "rio-ebro",
+    storageBucket: "rio-ebro.firebasestorage.app",
+    messagingSenderId: "867230279445",
+    appId: "1:867230279445:web:5afb433821606547276b1c",
+    measurementId: "G-N9PV3N2M2J"
+  };
+
+  // Initialize Firebase
+  firebase.initializeApp(firebaseConfig);
+  const messaging = firebase.messaging();
+
   const connDot = document.getElementById("connDot");
   const connText = document.getElementById("connText");
   const siteSelect = document.getElementById("siteSelect");
@@ -840,8 +864,8 @@
       setRainState(data.aemet_mm_24h_sum, data.aemet_prob_24h_max);
 
       window._lastIaRef = data.ia_refreshed_at ?? "-";
-      console.log("IA ERROR:", data.ia_error);
-      console.log("IA PRED:", data.pred_semana);
+      // console.log("IA ERROR:", data.ia_error);
+      // console.log("IA PRED:", data.pred_semana);
       updateIAState(data.ia_error, data.pred_semana);
       updatePredChart(data.pred_semana);
 
@@ -876,7 +900,7 @@
       const latlng = m.getLatLng();
       const nombre = m.getPopup().getContent().split("<br>")[0].replace("<b>", "").replace("</b>", "");
 
-      updateMarker(id, latlng.lat, latlng.lng, nombre, nivel, caudal);
+      updateMarker(id, latlng.lat, latlng.lng, nombre, nivel, null);
     });
   }
 
@@ -955,6 +979,52 @@
 
 
   loadSites();
+  
+  async function initNotifications() {
+    try {
+      console.log("🔔 Iniciando notificaciones...");
+
+      const permission = await Notification.requestPermission();
+      console.log("Permiso:", permission);
+
+      if (permission !== "granted") {
+        console.log("❌ Permiso denegado");
+        return;
+      }
+
+      // 🔥 REGISTRAR SERVICE WORKER (CLAVE)
+      if ('serviceWorker' in navigator) {
+        const registration = await navigator.serviceWorker.register('/firebase-messaging-sw.js');
+        console.log("✅ Service Worker registrado:", registration);
+      }
+
+      // esperar a que el SW esté activo
+      const registration = await navigator.serviceWorker.ready;
+
+      const token = await messaging.getToken({
+        vapidKey: "BCFznYCtRHRklZcr-XJ2jjnjvzIFV0OBPqcZXdZWJdJI7YT8GClCn-uc8Qi1fFT_zyicRQNrRxG7qo6uKJwWGng",
+        serviceWorkerRegistration: registration
+      });
+
+      if (!token) {
+        console.log("❌ No se generó token");
+      } else {
+        console.log("🔥 TOKEN:", token);
+      }
+
+      await fetch("/api/token", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json"
+        },
+        body: JSON.stringify({ token })
+      });
+
+    } catch (err) {
+      console.error("❌ ERROR Firebase:", err);
+    }
+  }
+
 </script>
 
 </body>

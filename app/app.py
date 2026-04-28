@@ -1,7 +1,17 @@
-import traceback
-
+import os
 from dotenv import load_dotenv
 load_dotenv()
+
+import firebase_admin
+from firebase_admin import credentials, messaging
+
+
+cred = credentials.Certificate(os.getenv("FIREBASE_CREDENTIALS"))
+firebase_admin.initialize_app(cred)
+
+import traceback
+
+
 
 from pathlib import Path
 from datetime import datetime
@@ -12,7 +22,7 @@ from typing import Dict, Any, Set, Optional
 import requests
 import pandas as pd
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect
-from fastapi.responses import HTMLResponse, JSONResponse
+from fastapi.responses import FileResponse, HTMLResponse, JSONResponse
 
 from api.saih_opendata import fetch_saih_signals
 from api.aemet_opendata import (
@@ -23,6 +33,9 @@ from api.aemet_opendata import (
 
 from prediccion_individual import predecir_semana_municipio
 from core.config import SITES, collect_all_tags
+
+from fastapi.staticfiles import StaticFiles
+
 
 # ---------------------------
 # Config
@@ -35,6 +48,7 @@ AEMET_REFRESH_SECONDS = 1800
 AEMET_CHECK_SECONDS = 60
 
 app = FastAPI()
+app.mount("/static", StaticFiles(directory="."), name="static")
 
 SITES_BY_ID = {s["id"]: s for s in SITES}
 
@@ -118,6 +132,33 @@ def api_sites():
         }
         for s in SITES
     ])
+
+tokens = set()
+
+@app.post("/api/token")
+async def save_token(data: dict):
+    token = data.get("token")
+    if token:
+        tokens.add(token)
+        print("🔥 Token guardado:", token[:20])
+    return {"ok": True}
+
+@app.get("/test-alert")
+def test_alert():
+    message = messaging.Message(
+        notification=messaging.Notification(
+            title="🚨 ALERTA RÍO EBRO",
+            body="Prueba de notificación funcionando correctamente"
+        ),
+        token="da6af1QKHhPBAm43Q_r1aN:APA91bEcq23OTJyQ9xZp18odwBPgoK6p4blseopPCLxdOyLXU28k_HIl2luDTU9zW6eeSM9Zm_HuOBcq9r60gogC8JDUVh3yWWSZQ29L_wKfIrauQD1Xe5k"
+    )
+
+    response = messaging.send(message)
+    return {"status": "enviado", "response": response}
+
+@app.get("/firebase-messaging-sw.js")
+def sw():
+    return FileResponse("firebase-messaging-sw.js")
 
 
 # ---------------------------
@@ -248,6 +289,22 @@ async def refresh_aemet_for_site(site_id: str, force: bool = True) -> bool:
 
     finally:
         aemet_inflight.discard(site_id)
+
+def send_notification(title: str, body: str):
+    for token in tokens:
+        message = messaging.Message(
+            notification=messaging.Notification(
+                title=title,
+                body=body,
+            ),
+            token=token,
+        )
+
+        try:
+            messaging.send(message)
+            print("✅ Notificación enviada")
+        except Exception as e:
+            print("❌ Error enviando:", e)
 
 
 # ---------------------------
@@ -438,3 +495,28 @@ async def on_startup():
     asyncio.create_task(poll_saih_loop())
     asyncio.create_task(poll_aemet_loop())
     asyncio.create_task(poll_ia_loop())
+
+
+# <script type="module">
+#   // Import the functions you need from the SDKs you need
+#   import { initializeApp } from "https://www.gstatic.com/firebasejs/12.12.1/firebase-app.js";
+#   import { getAnalytics } from "https://www.gstatic.com/firebasejs/12.12.1/firebase-analytics.js";
+#   // TODO: Add SDKs for Firebase products that you want to use
+#   // https://firebase.google.com/docs/web/setup#available-libraries
+
+#   // Your web app's Firebase configuration
+#   // For Firebase JS SDK v7.20.0 and later, measurementId is optional
+#   const firebaseConfig = {
+#     apiKey: "AIzaSyCXNKG8wb5IsTLaL6WLPIiRCPtuF4MIlLo",
+#     authDomain: "rio-ebro.firebaseapp.com",
+#     projectId: "rio-ebro",
+#     storageBucket: "rio-ebro.firebasestorage.app",
+#     messagingSenderId: "867230279445",
+#     appId: "1:867230279445:web:5afb433821606547276b1c",
+#     measurementId: "G-N9PV3N2M2J"
+#   };
+
+#   // Initialize Firebase
+#   const app = initializeApp(firebaseConfig);
+#   const analytics = getAnalytics(app);
+# </script>
