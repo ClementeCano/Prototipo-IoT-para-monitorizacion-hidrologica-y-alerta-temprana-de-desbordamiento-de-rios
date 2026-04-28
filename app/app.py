@@ -21,7 +21,7 @@ from api.aemet_opendata import (
     extract_prob_precip_summary,
 )
 
-from prediccion import predecir_semana
+from prediccion_individual import predecir_semana_municipio
 from core.config import SITES, collect_all_tags
 
 # ---------------------------
@@ -127,19 +127,6 @@ def _ia_public_cache(site_id: str) -> Dict[str, Any]:
         return _default_ia()
     return c
 
-def _load_dataset_modelo() -> pd.DataFrame:
-    global _dataset_modelo_cache
-
-    if _dataset_modelo_cache is None:
-        BASE_DIR = Path(__file__).resolve().parent
-        path = BASE_DIR / "salidas" / "dataset_modelo_final.csv"
-
-        print("📂 Cargando dataset:", path)
-        print("EXISTE:", path.exists())
-
-        _dataset_modelo_cache = pd.read_csv(path)
-
-    return _dataset_modelo_cache
 
 def _build_payload(site_id: str, forced_is_new: Optional[bool] = None) -> Dict[str, Any]:
     site = SITES_BY_ID.get(site_id, {"id": site_id, "name": site_id})
@@ -169,46 +156,13 @@ def _build_payload(site_id: str, forced_is_new: Optional[bool] = None) -> Dict[s
 def _chunk(lst: list[str], n: int) -> list[list[str]]:
     return [lst[i:i+n] for i in range(0, len(lst), n)]
 
-def _normalize_site_name_for_model(site_name: str) -> str:
-    """
-    Ajusta algunos nombres para que coincidan con el dataset_modelo.csv.
-    Cambia aquí si tus nombres reales son distintos.
-    """
-    mapping = {
-        "Ascó": "Asco",
-        "Castejón": "Castejon",
-    }
-    return mapping.get(site_name, site_name)
 
 async def refresh_ia_for_site(site_id: str) -> bool:
-    print("🚀 llamando a IA para:", site_id)
-    """
-    Calcula la predicción IA para el sitio actual usando el dataset unificado.
-    """
-    if predecir_semana is None:
-        ia_cache_by_site[site_id] = {
-            "ia_refreshed_at": datetime.now().isoformat(timespec="seconds"),
-            "ia_error": "No se pudo importar prediccion.py",
-            "pred_semana": [],
-        }
-        return False
-
-    site = SITES_BY_ID.get(site_id)
-    if not site:
-        return False
-
-    site_name = _normalize_site_name_for_model(site.get("name", site_id))
+    print("🚀 IA para:", site_id)
 
     try:
-        df_modelo = _load_dataset_modelo()
+        pred = await asyncio.to_thread(predecir_semana_municipio, site_id)
 
-        # Intenta primero con site_name; si la función no lo acepta, cae al fallback
-        try:
-            pred = predecir_semana(df_modelo, site_name=site_name)
-        except TypeError:
-            pred = predecir_semana(df_modelo)
-
-        # Validación ligera
         if pred is None:
             pred = []
 
@@ -217,6 +171,7 @@ async def refresh_ia_for_site(site_id: str) -> bool:
             "ia_error": None,
             "pred_semana": pred,
         }
+
         return True
 
     except Exception as e:
@@ -225,7 +180,7 @@ async def refresh_ia_for_site(site_id: str) -> bool:
             "ia_error": repr(e),
             "pred_semana": [],
         }
-        
+
         traceback.print_exc()
         return False
 
@@ -464,7 +419,7 @@ async def poll_ia_loop():
         except Exception as e:
             print("[IA LOOP ERROR]", repr(e))
 
-        await asyncio.sleep(300)
+        await asyncio.sleep(3600)
 
 @app.on_event("startup")
 async def on_startup():
