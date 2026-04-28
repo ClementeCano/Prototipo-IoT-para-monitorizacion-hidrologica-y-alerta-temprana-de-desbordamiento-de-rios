@@ -1,0 +1,19 @@
+# 🔐 Credenciales
+firebase-key.json
+.env
+.env.*
+
+# 🧠 Python
+__pycache__/
+*.pyc
+
+# 📦 Entornos virtuales
+venv/
+.env/
+
+# 📁 Sistema
+.DS_Store
+Thumbs.db
+
+# 🔧 Logs
+*.log
