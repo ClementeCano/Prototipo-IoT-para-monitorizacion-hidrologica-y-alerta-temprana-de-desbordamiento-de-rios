@@ -5,6 +5,8 @@
   <meta name="viewport" content="width=device-width, initial-scale=1"/>
   <title>TFG Río Ebro – Tiempo real</title>
   <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+  <link rel="stylesheet" href="https://unpkg.com/leaflet/dist/leaflet.css" />
+  <script src="https://unpkg.com/leaflet/dist/leaflet.js"></script>
 <style>
   :root{
     --bg0:#05070d;
@@ -360,6 +362,12 @@
         <canvas id="predChart"></canvas>
       </div>
     </div>
+
+  
+    <div class="card" style="margin-top:14px;">
+      <h3 class="sectiontitle">Mapa de municipios</h3>
+      <div id="map" style="height: 60vh; min-height: 450px; border-radius: 12px;"></div>
+    </div>
   </div>
 
 <script>
@@ -569,110 +577,110 @@
   }
 
   function updatePredChart(pred) {
-  const canvas = document.getElementById("predChart");
-  if (!canvas) return;
+    const canvas = document.getElementById("predChart");
+    if (!canvas) return;
 
-  const limpia = limpiarPred(pred);
+    const limpia = limpiarPred(pred);
 
-  if (limpia.length === 0) {
+    if (limpia.length === 0) {
+      if (predChart) predChart.destroy();
+      return;
+    }
+
+    const labels = limpia.map((_, i) => `Día ${i+1}`);
+
+    const nivel = limpia.map(p => p[0]);
+    const caudal = limpia.map(p => p[1]);
+
+    // 🔥 FILTRO DE VALORES EXTREMOS (MUY IMPORTANTE)
+    function clampArray(arr, min, max) {
+      return arr.map(v => {
+        if (v === null) return null;
+        return Math.max(min, Math.min(max, v));
+      });
+    }
+
+    const nivelClean = clampArray(nivel, 0, 10);     // niveles reales
+    const caudalClean = clampArray(caudal, 0, 2000); // ajusta a tu río
+
+    // 🔥 ESCALAS DINÁMICAS
+    const maxNivel = Math.max(...nivelClean.filter(v => v !== null));
+    const maxCaudal = Math.max(...caudalClean.filter(v => v !== null));
+
     if (predChart) predChart.destroy();
-    return;
-  }
 
-  const labels = limpia.map((_, i) => `Día ${i+1}`);
-
-  const nivel = limpia.map(p => p[0]);
-  const caudal = limpia.map(p => p[1]);
-
-  // 🔥 FILTRO DE VALORES EXTREMOS (MUY IMPORTANTE)
-  function clampArray(arr, min, max) {
-    return arr.map(v => {
-      if (v === null) return null;
-      return Math.max(min, Math.min(max, v));
-    });
-  }
-
-  const nivelClean = clampArray(nivel, 0, 10);     // niveles reales
-  const caudalClean = clampArray(caudal, 0, 2000); // ajusta a tu río
-
-  // 🔥 ESCALAS DINÁMICAS
-  const maxNivel = Math.max(...nivelClean.filter(v => v !== null));
-  const maxCaudal = Math.max(...caudalClean.filter(v => v !== null));
-
-  if (predChart) predChart.destroy();
-
-  predChart = new Chart(canvas, {
-    type: "line",
-    data: {
-      labels,
-      datasets: [
-        {
-          label: "Nivel (m)",
-          data: nivelClean,
-          borderWidth: 3,
-          tension: 0.35,
-          pointRadius: 5,
-          borderColor: "#22c55e",
-          yAxisID: "yNivel"
-        },
-        {
-          label: "Caudal (m³/s)",
-          data: caudalClean,
-          borderWidth: 2,
-          tension: 0.35,
-          borderDash: [6,6],
-          borderColor: "#7c3aed",
-          yAxisID: "yCaudal"
-        }
-      ]
-    },
-    options: {
-      responsive: true,
-      maintainAspectRatio: false,
-
-      plugins: {
-        legend: {
-          labels: { color: "white" }
-        }
-      },
-
-      scales: {
-        yNivel: {
-          type: "linear",
-          position: "left",
-          min: 0,
-          max: Math.ceil(maxNivel + 0.5),
-          ticks: {
-            color: "white",
-            callback: v => v.toFixed(1)
+    predChart = new Chart(canvas, {
+      type: "line",
+      data: {
+        labels,
+        datasets: [
+          {
+            label: "Nivel (m)",
+            data: nivelClean,
+            borderWidth: 3,
+            tension: 0.35,
+            pointRadius: 5,
+            borderColor: "#22c55e",
+            yAxisID: "yNivel"
           },
-          title: {
-            display: true,
-            text: "Nivel (m)",
-            color: "white"
+          {
+            label: "Caudal (m³/s)",
+            data: caudalClean,
+            borderWidth: 2,
+            tension: 0.35,
+            borderDash: [6,6],
+            borderColor: "#7c3aed",
+            yAxisID: "yCaudal"
+          }
+        ]
+      },
+      options: {
+        responsive: true,
+        maintainAspectRatio: false,
+
+        plugins: {
+          legend: {
+            labels: { color: "white" }
           }
         },
 
-        yCaudal: {
-          type: "linear",
-          position: "right",
-          min: 0,
-          max: Math.ceil(maxCaudal * 1.2),
-          ticks: {
-            color: "white",
-            callback: v => Math.round(v)
+        scales: {
+          yNivel: {
+            type: "linear",
+            position: "left",
+            min: 0,
+            max: Math.ceil(maxNivel + 0.5),
+            ticks: {
+              color: "white",
+              callback: v => v.toFixed(1)
+            },
+            title: {
+              display: true,
+              text: "Nivel (m)",
+              color: "white"
+            }
           },
-          grid: { drawOnChartArea: false },
-          title: {
-            display: true,
-            text: "Caudal (m³/s)",
-            color: "white"
+
+          yCaudal: {
+            type: "linear",
+            position: "right",
+            min: 0,
+            max: Math.ceil(maxCaudal * 1.2),
+            ticks: {
+              color: "white",
+              callback: v => Math.round(v)
+            },
+            grid: { drawOnChartArea: false },
+            title: {
+              display: true,
+              text: "Caudal (m³/s)",
+              color: "white"
+            }
           }
         }
       }
-    }
-  });
-}
+    });
+  }
 
   function updateIAState(error, pred) {
     iaRef.textContent = window._lastIaRef ?? "-";
@@ -706,10 +714,17 @@
     }
   }
 
+  let sitesGlobal = []; // 🔥 guardar sitios para mapa
+
   async function loadSites() {
     const res = await fetch("/api/sites");
     const sites = await res.json();
 
+    sitesGlobal = sites; // 🔥 guardar para usar en mapa
+
+    // =========================
+    // SELECTOR
+    // =========================
     siteSelect.innerHTML = sites
       .map(s => `<option value="${s.id}">${s.name}</option>`)
       .join("");
@@ -718,10 +733,31 @@
 
     siteSelect.addEventListener("change", () => {
       currentSite = siteSelect.value;
+
+      // 🔥 centrar mapa al seleccionar
+      const s = sitesGlobal.find(x => x.id === currentSite);
+      if (s && s.lat && s.lon) {
+        map.setView([s.lat, s.lon], 10);
+      }
+
       if (ws && ws.readyState === WebSocket.OPEN) {
         ws.send(JSON.stringify({ type: "set_site", site: currentSite }));
       }
     });
+
+    // =========================
+    // 🔥 MAPA (crear marcadores iniciales)
+    // =========================
+    sites.forEach(s => {
+      if (s.lat && s.lon) {
+        updateMarker(s.id, s.lat, s.lon, s.name, null, null);
+      }
+    });
+
+    // 🔥 centrar en el primero
+    if (sites[0]?.lat && sites[0]?.lon) {
+      map.setView([sites[0].lat, sites[0].lon], 7);
+    }
 
     startWS();
   }
@@ -793,10 +829,118 @@
       console.log("IA PRED:", data.pred_semana);
       updateIAState(data.ia_error, data.pred_semana);
       updatePredChart(data.pred_semana);
+
+      // 🔥 ACTUALIZAR MAPA EN TIEMPO REAL
+      if (data.site_id && data.lat && data.lon) {
+        const nivel = toNum(data.nivel_m);
+        const caudal = toNum(data.caudal_m3s);
+        updateMarker(
+          data.site_id,
+          data.lat,
+          data.lon,
+          data.site_name || data.site_id,
+          nivel,
+          caudal
+        );
+      }
     };
   }
 
+  // =========================
+  // MAPA
+  // =========================
+
+  function refreshAllMarkers() {
+    Object.keys(markers).forEach(id => {
+      const m = markers[id];
+
+      const nivelText = m.getPopup().getContent();
+      const nivelMatch = nivelText.match(/Nivel: ([\d.]+)/);
+      const nivel = nivelMatch ? parseFloat(nivelMatch[1]) : null;
+
+      const latlng = m.getLatLng();
+      const nombre = m.getPopup().getContent().split("<br>")[0].replace("<b>", "").replace("</b>", "");
+
+      updateMarker(id, latlng.lat, latlng.lng, nombre, nivel, caudal);
+    });
+  }
+
+  const map = L.map('map').setView([41.65, -0.88], 6);
+
+  L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+    attribution: '&copy; OpenStreetMap contributors'
+  }).addTo(map);
+
+  let markers = {}; // guardar marcadores por id
+
+  function getColorNivel(nivel) {
+    if (nivel === null || nivel === undefined) return "#999";
+    if (nivel >= 3) return "#ef4444";   // rojo
+    if (nivel >= 2) return "#f59e0b";   // naranja
+    return "#22c55e";                   // verde
+  }
+
+  function updateMarker(siteId, lat, lon, nombre, nivel, caudal) {
+    const color = getColorNivel(nivel);
+    const isActive = (siteId === currentSite);
+
+    const radius = isActive ? 12 : 8;
+    const weight = isActive ? 3 : 1.5;
+
+    const popupContent = `
+      <b>${nombre}</b><br>
+      Nivel: ${nivel ?? "-"} m<br>
+      Caudal: ${caudal ?? "-"} m³/s<br>
+      ${isActive ? "<span style='color:#22c55e'>● Seleccionado</span>" : ""}
+    `;
+
+    if (markers[siteId]) {
+      // 🔄 actualizar marcador existente
+      markers[siteId].setStyle({
+        color: color,
+        fillColor: color,
+        radius: radius,
+        weight: weight
+      });
+
+      markers[siteId].setPopupContent(popupContent);
+
+    } else {
+      // 🆕 crear marcador
+      markers[siteId] = L.circleMarker([lat, lon], {
+        radius: radius,
+        color: color,
+        fillColor: color,
+        fillOpacity: 0.85,
+        weight: weight
+      })
+      .addTo(map)
+      .bindPopup(popupContent);
+
+      // 🔥 CLICK EN MAPA → CAMBIAR MUNICIPIO
+      markers[siteId].on("click", () => {
+        currentSite = siteId;
+
+        // sincronizar selector
+        siteSelect.value = siteId;
+
+        // centrar mapa
+        map.setView([lat, lon], 10);
+
+        // enviar al backend
+        if (ws && ws.readyState === WebSocket.OPEN) {
+          ws.send(JSON.stringify({ type: "set_site", site: siteId }));
+        }
+
+        // 🔄 refrescar todos los marcadores (para resaltar activo)
+        refreshAllMarkers();
+      });
+    }
+  }
+
+
   loadSites();
 </script>
+
 </body>
 </html>

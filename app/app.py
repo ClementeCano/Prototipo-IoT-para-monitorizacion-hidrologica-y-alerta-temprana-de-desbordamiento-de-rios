@@ -109,7 +109,15 @@ def home():
 
 @app.get("/api/sites")
 def api_sites():
-    return JSONResponse([{"id": s["id"], "name": s["name"]} for s in SITES])
+    return JSONResponse([
+        {
+            "id": s["id"],
+            "name": s["name"],
+            "lat": s.get("lat"),
+            "lon": s.get("lon"),
+        }
+        for s in SITES
+    ])
 
 
 # ---------------------------
@@ -137,6 +145,10 @@ def _build_payload(site_id: str, forced_is_new: Optional[bool] = None) -> Dict[s
     payload = {
         "site_id": site_id,
         "site_name": site.get("name", site_id),
+
+        "lat": site.get("lat"),
+        "lon": site.get("lon"),
+        "is_selected": True,
 
         "ts": ts,
         "refreshed_at": datetime.now().isoformat(timespec="seconds"),
