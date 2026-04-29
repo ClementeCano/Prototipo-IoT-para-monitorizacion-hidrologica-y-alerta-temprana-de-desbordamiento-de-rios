@@ -6,12 +6,14 @@ load_dotenv()
 import firebase_admin
 from firebase_admin import credentials, messaging
 
+import traceback
 
 if not firebase_admin._apps:
     firebase_key = os.getenv("FIREBASE_CREDENTIALS")
 
     if firebase_key:
         try:
+            
             cred = credentials.Certificate(firebase_key)
             firebase_admin.initialize_app(cred)
             print("✅ Firebase inicializado")
@@ -21,7 +23,6 @@ if not firebase_admin._apps:
     else:
         print("⚠️ No FIREBASE_CREDENTIALS en entorno")
 
-import traceback
 
 
 
