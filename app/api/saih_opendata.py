@@ -64,6 +64,7 @@ def _safe_get(url: str, params: dict, timeout=(6, 20)):
                 url,
                 params=params,
                 timeout=timeout,
+                verify=False,  # DESACTIVADO para evitar errores SSL en algunos entornos (usar con precaución)
             )
             r.raise_for_status()
             return r.json()

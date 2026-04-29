@@ -20,6 +20,7 @@ if not firebase_admin._apps:
             print("✅ Firebase inicializado")
         except Exception as e:
             print("❌ Error Firebase:", e)
+            traceback.print_exc()
          
     else:
         print("⚠️ No FIREBASE_CREDENTIALS en entorno")
@@ -249,7 +250,7 @@ async def refresh_ia_for_site(site_id: str) -> bool:
             "pred_semana": [],
         }
 
-        #traceback.print_exc()
+        traceback.print_exc()
         return False
 
 async def refresh_aemet_for_site(site_id: str, force: bool = True) -> bool:
