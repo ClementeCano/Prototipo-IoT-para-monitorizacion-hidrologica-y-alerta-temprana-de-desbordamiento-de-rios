@@ -130,9 +130,11 @@ _init_caches()
 # ---------------------------
 # HTTP routes
 # ---------------------------
+BASE_DIR = Path(__file__).resolve().parent
+
 @app.get("/")
 def home():
-    return HTMLResponse(Path("index.html").read_text(encoding="utf-8"))
+    return HTMLResponse((BASE_DIR / "index.html").read_text(encoding="utf-8"))
 
 @app.get("/api/sites")
 def api_sites():
@@ -171,7 +173,7 @@ def test_alert():
 
 @app.get("/firebase-messaging-sw.js")
 def sw():
-    return FileResponse("firebase-messaging-sw.js")
+    return FileResponse((BASE_DIR / "firebase-messaging-sw.js").read_text(encoding="utf-8"))
 
 
 # ---------------------------
