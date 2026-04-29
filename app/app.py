@@ -2,19 +2,20 @@ import json
 import os
 from dotenv import load_dotenv
 load_dotenv()
+import traceback
 
 import firebase_admin
 from firebase_admin import credentials, messaging
 
-import traceback
 
 if not firebase_admin._apps:
     firebase_key = os.getenv("FIREBASE_CREDENTIALS")
 
     if firebase_key:
         try:
-            
-            cred = credentials.Certificate(firebase_key)
+
+            cred_dict = json.loads(firebase_key)
+            cred = credentials.Certificate(cred_dict)
             firebase_admin.initialize_app(cred)
             print("✅ Firebase inicializado")
         except Exception as e:
