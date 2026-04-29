@@ -1,14 +1,20 @@
-# fly.toml app configuration file generated for schedule-ebro on 2026-04-23T09:00:35+02:00
+# fly.toml app configuration file generated for dashboard-ebro on 2026-04-29T10:03:14+02:00
 #
 # See https://fly.io/docs/reference/configuration/ for information about how to use this file.
 #
 
-app = 'schedule-ebro'
+app = 'dashboard-ebro'
 primary_region = 'cdg'
 
-auto_stop_machines = false
-min_machines_running = 1
+[build]
 
+[http_service]
+  internal_port = 8080
+  force_https = true
+  auto_stop_machines = 'stop'
+  auto_start_machines = true
+  min_machines_running = 0
+  processes = ['app']
 
 [[vm]]
   memory = '1gb'

@@ -1,3 +1,4 @@
+import json
 import os
 from dotenv import load_dotenv
 load_dotenv()
@@ -6,8 +7,19 @@ import firebase_admin
 from firebase_admin import credentials, messaging
 
 
-cred = credentials.Certificate(os.getenv("FIREBASE_CREDENTIALS"))
-firebase_admin.initialize_app(cred)
+if not firebase_admin._apps:
+    firebase_key = os.getenv("FIREBASE_CREDENTIALS")
+
+    if firebase_key:
+        try:
+            cred_dict = json.loads(firebase_key)
+            cred = credentials.Certificate(cred_dict)
+            firebase_admin.initialize_app(cred)
+            print("✅ Firebase inicializado")
+        except Exception as e:
+            print("❌ Error Firebase:", e)
+    else:
+        print("⚠️ No FIREBASE_CREDENTIALS en entorno")
 
 import traceback
 
@@ -16,7 +28,6 @@ import traceback
 from pathlib import Path
 from datetime import datetime
 import asyncio
-import json
 from typing import Dict, Any, Set, Optional
 
 import requests
@@ -24,15 +35,15 @@ import pandas as pd
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect
 from fastapi.responses import FileResponse, HTMLResponse, JSONResponse
 
-from api.saih_opendata import fetch_saih_signals
-from api.aemet_opendata import (
+from app.api.saih_opendata import fetch_saih_signals
+from app.api.aemet_opendata import (
     fetch_aemet_municipio_horaria,
     extract_rain_forecast_mm,
     extract_prob_precip_summary,
 )
 
-from prediccion_individual import predecir_semana_municipio
-from core.config import SITES, collect_all_tags
+from app.prediccion_individual import predecir_semana_municipio
+from app.core.config import SITES, collect_all_tags
 
 from fastapi.staticfiles import StaticFiles
 

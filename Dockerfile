@@ -15,8 +15,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends ca-certificates
 COPY requirements.txt .
 
 # 🔥 Actualizar pip + instalar deps
-RUN pip install --no-cache-dir --upgrade pip \
-    && pip install --no-cache-dir -r requirements.txt
+RUN pip install --no-cache-dir --upgrade pip && pip install --no-cache-dir -r requirements.txt
 
 # Copiar el resto del código
 COPY . .
@@ -25,4 +24,4 @@ COPY . .
 # RUN ls -R /app
 
 # Comando por defecto (modo no bufferizado)
-CMD ["python", "-u", "app/scheduler.py"]
+CMD ["uvicorn", "app.app:app", "--host", "0.0.0.0", "--port", "8080"]
