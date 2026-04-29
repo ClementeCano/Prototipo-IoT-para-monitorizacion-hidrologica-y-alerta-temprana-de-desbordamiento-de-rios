@@ -68,12 +68,12 @@
   .topgrid{
     display:grid;
     grid-template-columns: 1fr;
-    gap: 14px;
+    gap: 16px;
   }
 
   @media (min-width: 1100px){
     .topgrid{
-      grid-template-columns: 0.9fr 1.1fr;
+      grid-template-columns: 0.85fr 1.15fr;
       align-items: stretch;
     }
   }
@@ -262,42 +262,123 @@
   #map{
     flex: 1;
   }
+
+  .leftcol{
+    display:flex;
+    flex-direction:column;
+    gap:16px;
+  }
+
+  .mapcard{
+    padding:12px;
+  }
+
+  #map{
+    height:100%;
+    min-height:520px;
+    border-radius:16px;
+  }
+
+  /* 🔥 BOTÓN PRO */
+  .alert-btn{
+    background: linear-gradient(90deg, #ef4444, #f59e0b);
+    border:none;
+    color:white;
+    padding:10px 16px;
+    border-radius:12px;
+    font-weight:700;
+    cursor:pointer;
+    box-shadow: 0 10px 30px rgba(239,68,68,.4);
+    transition: 0.2s;
+  }
+
+  .alert-btn.active{
+    background: linear-gradient(90deg, #22c55e, #16a34a);
+    box-shadow: 0 10px 30px rgba(34,197,94,.4);
+  }
+
+  .alert-btn:hover{
+    transform: scale(1.05);
+  }
+
+  /* 🔥 KPIs MÁS GRANDES */
+  .big{
+    font-size:56px;
+    font-weight:900;
+  }
+
+  .scroll-card{
+    max-height: 320px;
+    overflow-y: auto;
+    padding-right: 6px;
+  }
+
+  /* scroll bonito */
+  .scroll-card::-webkit-scrollbar{
+    width: 6px;
+  }
+
+  .scroll-card::-webkit-scrollbar-thumb{
+    background: rgba(255,255,255,.2);
+    border-radius: 10px;
+  }
+
 </style>
 </head>
 
 <body>
-  <button onclick="initNotifications()" class="pill">
-    Activar alertas 🔔
-  </button>
-  <div class="layout">
-    <h1 id="title">Dashboard Río Ebro</h1>
-    <div class="muted">Selecciona un lugar y verás nivel/caudal (SAIH), lluvia (AEMET) y una predicción IA de una semana.</div>
+  <!-- HEADER / CONTROLES -->
+<div class="layout">
 
-    <div class="topgrid">
-      <!-- IZQUIERDA -->
+  <div class="row" style="justify-content: space-between; align-items:center; margin-bottom:10px;">
+    <div>
+      <h1 id="title">Dashboard Río Ebro</h1>
+      <div class="muted">
+        Monitorización en tiempo real + predicción IA
+      </div>
+    </div>
+
+    <button onclick="toggleAlerts()" class="alert-btn" id ="alertBtn">
+      🔔 Activar alertas
+    </button>
+  </div>
+
+  <!-- GRID PRINCIPAL -->
+  <div class="topgrid">
+
+    <!-- IZQUIERDA -->
+    <div class="leftcol">
+
+      <!-- KPIs -->
       <div class="card">
         <div class="row" style="justify-content: space-between;">
           <div class="row">
-            <span class="pill"><span class="dot" id="connDot"></span> <span id="connText">Desconectado</span></span>
+            <span class="pill">
+              <span class="dot" id="connDot"></span>
+              <span id="connText">Desconectado</span>
+            </span>
 
             <span class="pill">
-              Lugar:
+              📍
               <select id="siteSelect" class="mono"></select>
             </span>
 
-            <span class="pill">Fuente: <span id="source" class="mono">-</span></span>
-            <span class="pill">Última medida: <span id="ts" class="mono">-</span></span>
-            <span class="pill">Refresco: <span id="ref" class="mono">-</span></span>
-            <span class="pill">Dato nuevo: <span id="isNew" class="mono">-</span></span>
+            <!-- 🔥 IDs necesarios ocultos -->
+            <span class="pill" style="display:none;">Fuente: <span id="source"></span></span>
+            <span class="pill" style="display:none;">TS: <span id="ts"></span></span>
+            <span class="pill" style="display:none;">Ref: <span id="ref"></span></span>
+            <span class="pill" style="display:none;">New: <span id="isNew"></span></span>
           </div>
         </div>
 
         <div class="kpi">
           <div>
             <div class="label">Nivel (m)</div>
+            <!-- 🔥 MANTENER SPAN -->
             <div class="big"><span id="nivel">-</span></div>
             <div class="muted">Tendencia: <span id="tn" class="mono">-</span></div>
           </div>
+
           <div>
             <div class="label">Caudal (m³/s)</div>
             <div class="big"><span id="caudal">-</span></div>
@@ -305,727 +386,766 @@
           </div>
         </div>
 
-        <div style="margin-top: 10px;">
-          <div class="label">Estado (visual)</div>
-          <div class="pill"><span class="dot" id="estadoDot"></span> <span id="estadoTxt">-</span></div>
-          <div class="muted" style="margin-top:8px; font-size: 12px;">
-            * Estado visual por umbral simple de nivel.
+        <div style="margin-top:14px;">
+          <div class="label">Estado</div>
+          <div class="pill">
+            <span class="dot" id="estadoDot"></span>
+            <span id="estadoTxt">-</span>
           </div>
         </div>
       </div>
 
-      <div class="card" style="margin-top:14px;">
-        <h3 class="sectiontitle">Mapa de municipios</h3>
-        <div id="map" style="height: 60vh; min-height: 450px; border-radius: 12px;"></div>
-      </div>
-
-      <!-- DERECHA -->
-      <div class="card">
-        <h3 class="sectiontitle">Predicción de lluvia (AEMET)</h3>
+      <!-- LLUVIA -->
+      <div class="card scroll-card">
+        <h3 class="sectiontitle">🌧️ Lluvia (AEMET)</h3>
 
         <div class="row">
-          <span class="pill">AEMET refresco: <span id="aemetRef" class="mono">-</span></span>
-          <span class="pill">Dato AEMET: <span class="dot" id="rainDot"></span> <span id="rainState">-</span></span>
+          <span class="pill">Refresco: <span id="aemetRef" class="mono">-</span></span>
+          <span class="pill">
+            <span class="dot" id="rainDot"></span>
+            <span id="rainState">-</span>
+          </span>
         </div>
 
         <div id="aemetErr" class="err"></div>
 
-        <div style="margin-top: 12px;">
-          <div class="label">Cantidad prevista (mm)</div>
-
-          <div class="kpi" style="grid-template-columns: 1fr 1fr;">
-            <div>
-              <div class="label">Acumulado 6h</div>
-              <div class="big"><span id="mm6sum">-</span></div>
-              <div class="muted">Máx/h: <span id="mm6max" class="mono">-</span> mm</div>
-            </div>
-            <div>
-              <div class="label">Acumulado 24h</div>
-              <div class="big"><span id="mm24sum">-</span></div>
-              <div class="muted">Máx/h: <span id="mm24max" class="mono">-</span> mm</div>
-            </div>
+        <div class="kpi">
+          <div>
+            <div class="label">6h</div>
+            <div class="big"><span id="mm6sum">-</span></div>
+            <div class="muted">Max: <span id="mm6max">-</span></div>
           </div>
 
-          <div style="margin-top: 12px;">
-            <div class="label">Probabilidad de precipitación (máximo)</div>
-
-            <div class="barwrap">
-              <div class="barlabel"><span>Próximas 6h</span><span><span id="p6" class="mono">-</span>%</span></div>
-              <div class="bar"><div id="barP6"></div></div>
+          <div class="barwrap">
+            <div class="barlabel">
+              Probabilidad 6h
+              <span><span id="p6">-</span>%</span>
             </div>
-
-            <div class="barwrap">
-              <div class="barlabel"><span>Próximas 24h</span><span><span id="p24" class="mono">-</span>%</span></div>
-              <div class="bar"><div id="barP24"></div></div>
-            </div>
+            <div class="bar"><div id="barP6"></div></div>
           </div>
 
-          <div style="margin-top: 12px;">
-            <div class="label">Próximas 12 horas (mm por hora)</div>
-            <table>
-              <thead><tr><th>Hora</th><th>mm</th></tr></thead>
-              <tbody id="mmTable"></tbody>
-            </table>
+          <div>
+            <div class="label">24h</div>
+            <div class="big"><span id="mm24sum">-</span></div>
+            <div class="muted">Max: <span id="mm24max">-</span></div>
           </div>
         </div>
-      </div>
-    </div>
 
-    <!-- IA -->
-    <div class="card" style="margin-top: 14px;">
-      <div class="row" style="justify-content: space-between;">
-        <h3 class="sectiontitle" style="margin:0;">Predicción nivel y caudal (7 días)</h3>
-        <div class="row">
-          <span class="pill">IA refresco: <span id="iaRef" class="mono">-</span></span>
-          <span class="pill">Estado IA: <span id="iaState" class="mono">-</span></span>
+        <div class="barwrap">
+          <div class="barlabel">
+            Probabilidad 24h
+            <span><span id="p24">-</span>%</span>
+          </div>
+          <div class="bar"><div id="barP24"></div></div>
         </div>
+
+        <!-- 🔥 tabla necesaria -->
+        <table>
+          <thead><tr><th>Hora</th><th>mm</th></tr></thead>
+          <tbody id="mmTable"></tbody>
+        </table>
       </div>
 
-      <div id="iaErr" class="err"></div>
-
-      <div class="chartwrap">
-        <canvas id="predChart"></canvas>
-      </div>
     </div>
 
-  
-    
+    <!-- MAPA -->
+    <div class="card mapcard">
+      <h3 class="sectiontitle">🗺️ Mapa en tiempo real</h3>
+      <div id="map"></div>
+    </div>
+
   </div>
 
+  <!-- IA -->
+  <div class="card" style="margin-top:16px;">
+    <div class="row" style="justify-content: space-between;">
+      <h3 class="sectiontitle">🤖 Predicción (7 días)</h3>
+      <div class="row">
+        <span class="pill">Refresco: <span id="iaRef">-</span></span>
+        <span class="pill">Estado: <span id="iaState">-</span></span>
+      </div>
+    </div>
+
+    <div id="iaErr" class="err"></div>
+
+    <div class="chartwrap">
+      <canvas id="predChart"></canvas>
+    </div>
+  </div>
+
+</div>
+
   
 
-<script>
-
-  const firebaseConfig = {
-    apiKey: "AIzaSyCXNKG8wb5IsTLaL6WLPIiRCPtuF4MIlLo",
-    authDomain: "rio-ebro.firebaseapp.com",
-    projectId: "rio-ebro",
-    storageBucket: "rio-ebro.firebasestorage.app",
-    messagingSenderId: "867230279445",
-    appId: "1:867230279445:web:5afb433821606547276b1c",
-    measurementId: "G-N9PV3N2M2J"
-  };
-
-  // Initialize Firebase
-  firebase.initializeApp(firebaseConfig);
-  const messaging = firebase.messaging();
-
-  const connDot = document.getElementById("connDot");
-  const connText = document.getElementById("connText");
-  const siteSelect = document.getElementById("siteSelect");
-  const titleEl = document.getElementById("title");
-
-  const sourceEl = document.getElementById("source");
-  const tsEl = document.getElementById("ts");
-  const refEl = document.getElementById("ref");
-  const isNewEl = document.getElementById("isNew");
-
-  const nivelEl = document.getElementById("nivel");
-  const caudalEl = document.getElementById("caudal");
-  const tnEl = document.getElementById("tn");
-  const tcEl = document.getElementById("tc");
-
-  const estadoDot = document.getElementById("estadoDot");
-  const estadoTxt = document.getElementById("estadoTxt");
-
-  const aemetRef = document.getElementById("aemetRef");
-  const aemetErr = document.getElementById("aemetErr");
-
-  const mm6sum = document.getElementById("mm6sum");
-  const mm24sum = document.getElementById("mm24sum");
-  const mm6max = document.getElementById("mm6max");
-  const mm24max = document.getElementById("mm24max");
-
-  const p6 = document.getElementById("p6");
-  const p24 = document.getElementById("p24");
-  const barP6 = document.getElementById("barP6");
-  const barP24 = document.getElementById("barP24");
-
-  const mmTable = document.getElementById("mmTable");
-  const rainDot = document.getElementById("rainDot");
-  const rainState = document.getElementById("rainState");
-
-  const iaRef = document.getElementById("iaRef");
-  const iaErr = document.getElementById("iaErr");
-  const iaState = document.getElementById("iaState");
-
-  const NIVEL_WARN = 2.0;
-  const NIVEL_BAD  = 3.0;
-
-  const IA_WARN = 2.5;
-  const IA_BAD = 3.5;
-
-  let predChart = null;
-  let ws = null;
-  let currentSite = null;
-
-  function setConn(isUp) {
-    connDot.className = "dot " + (isUp ? "ok" : "");
-    connText.textContent = isUp ? "Conectado" : "Desconectado";
-  }
-
-  function fmt(x, decimals = 2) {
-    if (x === null || x === undefined) return "-";
-    const n = Number(x);
-    if (Number.isNaN(n)) return "-";
-    return n.toFixed(decimals);
-  }
-
-  function toNum(value) {
-    const n = Number(value);
-    return Number.isFinite(n) ? n : null;
-  }
-
-  function setEstadoRio(nivel) {
-    if (typeof nivel !== "number" || !Number.isFinite(nivel)) {
-      estadoDot.className = "dot";
-      estadoTxt.textContent = "-";
-      return;
-    }
-
-    if (nivel >= NIVEL_BAD) {
-      estadoDot.className = "dot bad";
-      estadoTxt.textContent = "ALTO (visual)";
-    } else if (nivel >= NIVEL_WARN) {
-      estadoDot.className = "dot warn";
-      estadoTxt.textContent = "MEDIO (visual)";
-    } else {
-      estadoDot.className = "dot ok";
-      estadoTxt.textContent = "Normal";
-    }
-  }
-
-  function clampProb(v) {
-    if (v === null || v === undefined) return null;
-    const n = Number(v);
-    if (Number.isNaN(n)) return null;
-    return Math.max(0, Math.min(100, n));
-  }
-
-  function setProbBars(v6, v24) {
-    const c6 = clampProb(v6);
-    const c24 = clampProb(v24);
-
-    barP6.style.width = (c6 === null ? "0%" : `${c6}%`);
-    barP24.style.width = (c24 === null ? "0%" : `${c24}%`);
-  }
-
-  function renderMmTable(list) {
-    mmTable.innerHTML = "";
-
-    if (!Array.isArray(list)) return;
-
-    for (const row of list.slice(0, 12)) {
-      const tr = document.createElement("tr");
-      tr.innerHTML = `
-        <td class="mono">${row?.hora ?? "-"}</td>
-        <td>${row?.mm ?? "-"}</td>
-      `;
-      mmTable.appendChild(tr);
-    }
-  }
-
-  function setRainState(mm24, p24) {
-    const mm = Number(mm24);
-    const prob = clampProb(p24);
-
-    if (Number.isNaN(mm) && prob === null) {
-      rainDot.className = "dot";
-      rainState.textContent = "-";
-      return;
-    }
-
-    if ((prob !== null && prob >= 70) || (!Number.isNaN(mm) && mm >= 10)) {
-      rainDot.className = "dot bad";
-      rainState.textContent = "Riesgo lluvia alto (visual)";
-    } else if ((prob !== null && prob >= 40) || (!Number.isNaN(mm) && mm >= 3)) {
-      rainDot.className = "dot warn";
-      rainState.textContent = "Riesgo lluvia medio (visual)";
-    } else {
-      rainDot.className = "dot ok";
-      rainState.textContent = "Riesgo lluvia bajo (visual)";
-    }
-  }
-
-  function limpiarPred(pred) {
-    if (!Array.isArray(pred)) return [];
-
-    return pred
-      .map((p) => {
-        if (!Array.isArray(p) || p.length < 2) return null;
-
-        const nivel = toNum(p[0]);
-        const caudal = toNum(p[1]);
-
-        if (nivel === null && caudal === null) return null;
-
-        return [nivel, caudal];
-      })
-      .filter(Boolean);
-  }
-
-  function evaluarRiesgoIA(pred) {
-    const limpia = limpiarPred(pred);
-
-    if (limpia.length === 0) {
-      return { texto: "Sin datos", clase: "" };
-    }
-
-    let maxNivel = -Infinity;
-    let diaMax = -1;
-
-    limpia.forEach((p, i) => {
-      const nivel = p[0];
-      if (typeof nivel === "number" && nivel > maxNivel) {
-        maxNivel = nivel;
-        diaMax = i;
-      }
-    });
-
-    if (!Number.isFinite(maxNivel)) {
-      return { texto: "Sin datos", clase: "" };
-    }
-
-    if (maxNivel >= IA_BAD) {
-      return {
-        texto: `Riesgo alto en ${diaMax + 1} días`,
-        clase: "bad"
-      };
-    }
-
-    if (maxNivel >= IA_WARN) {
-      return {
-        texto: `Posible crecida en ${diaMax + 1} días`,
-        clase: "warn"
-      };
-    }
-
-    return {
-      texto: "Sin riesgo relevante",
-      clase: "ok"
-    };
-  }
-
-  function colorNivel(v) {
-    if (v === null || v === undefined || !Number.isFinite(v)) {
-      return "rgba(255,255,255,.35)";
-    }
-    if (v >= IA_BAD) return "#ef4444";
-    if (v >= IA_WARN) return "#f59e0b";
-    return "#22c55e";
-  }
-
-  function updatePredChart(pred) {
-    const canvas = document.getElementById("predChart");
-    if (!canvas) return;
-
-    const limpia = limpiarPred(pred);
-
-    if (limpia.length === 0) {
-      if (predChart) predChart.destroy();
-      return;
-    }
-
-    const labels = limpia.map((_, i) => `Día ${i+1}`);
-
-    const nivel = limpia.map(p => p[0]);
-    const caudal = limpia.map(p => p[1]);
-
-    // 🔥 FILTRO DE VALORES EXTREMOS (MUY IMPORTANTE)
-    function clampArray(arr, min, max) {
-      return arr.map(v => {
-        if (v === null) return null;
-        return Math.max(min, Math.min(max, v));
-      });
-    }
-
-    const nivelClean = clampArray(nivel, 0, 10);     // niveles reales
-    const caudalClean = clampArray(caudal, 0, 2000); // ajusta a tu río
-
-    // 🔥 ESCALAS DINÁMICAS
-    const maxNivel = Math.max(...nivelClean.filter(v => v !== null));
-    const maxCaudal = Math.max(...caudalClean.filter(v => v !== null));
-
-    if (predChart) predChart.destroy();
-
-    predChart = new Chart(canvas, {
-      type: "line",
-      data: {
-        labels,
-        datasets: [
-          {
-            label: "Nivel (m)",
-            data: nivelClean,
-            borderWidth: 3,
-            tension: 0.35,
-            pointRadius: 5,
-            borderColor: "#22c55e",
-            yAxisID: "yNivel"
-          },
-          {
-            label: "Caudal (m³/s)",
-            data: caudalClean,
-            borderWidth: 2,
-            tension: 0.35,
-            borderDash: [6,6],
-            borderColor: "#7c3aed",
-            yAxisID: "yCaudal"
-          }
-        ]
-      },
-      options: {
-        responsive: true,
-        maintainAspectRatio: false,
-
-        plugins: {
-          legend: {
-            labels: { color: "white" }
-          }
-        },
-
-        scales: {
-          yNivel: {
-            type: "linear",
-            position: "left",
-            min: 0,
-            max: Math.ceil(maxNivel + 0.5),
-            ticks: {
-              color: "white",
-              callback: v => v.toFixed(1)
-            },
-            title: {
-              display: true,
-              text: "Nivel (m)",
-              color: "white"
-            }
-          },
-
-          yCaudal: {
-            type: "linear",
-            position: "right",
-            min: 0,
-            max: Math.ceil(maxCaudal * 1.2),
-            ticks: {
-              color: "white",
-              callback: v => Math.round(v)
-            },
-            grid: { drawOnChartArea: false },
-            title: {
-              display: true,
-              text: "Caudal (m³/s)",
-              color: "white"
-            }
-          }
-        }
-      }
-    });
-  }
-
-  function updateIAState(error, pred) {
-    iaRef.textContent = window._lastIaRef ?? "-";
-
-    if (error) {
-      iaErr.style.display = "block";
-      iaErr.textContent = `Error IA: ${error}`;
-      iaState.textContent = "Error";
-      return;
-    }
-
-    iaErr.style.display = "none";
-    iaErr.textContent = "";
-
-    const limpia = limpiarPred(pred);
-
-    if (limpia.length > 0) {
-      const riesgo = evaluarRiesgoIA(limpia);
-
-      if (riesgo.clase === "bad") {
-        iaState.textContent = "Riesgo alto";
-      } else if (riesgo.clase === "warn") {
-        iaState.textContent = "Vigilancia";
-      } else if (riesgo.clase === "ok") {
-        iaState.textContent = "Estable";
-      } else {
-        iaState.textContent = "Disponible";
-      }
-    } else {
-      iaState.textContent = "Sin datos";
-    }
-  }
-
-  let sitesGlobal = []; // 🔥 guardar sitios para mapa
-
-  async function loadSites() {
-    const res = await fetch("/api/sites");
-    const sites = await res.json();
-
-    sitesGlobal = sites; // 🔥 guardar para usar en mapa
-
-    // =========================
-    // SELECTOR
-    // =========================
-    siteSelect.innerHTML = sites
-      .map(s => `<option value="${s.id}">${s.name}</option>`)
-      .join("");
-
-    currentSite = sites[0]?.id ?? null;
-
-    siteSelect.addEventListener("change", () => {
-      currentSite = siteSelect.value;
-
-      // 🔥 centrar mapa al seleccionar
-      const s = sitesGlobal.find(x => x.id === currentSite);
-      if (s && s.lat && s.lon) {
-        map.setView([s.lat, s.lon], 10);
-      }
-
-      if (ws && ws.readyState === WebSocket.OPEN) {
-        ws.send(JSON.stringify({ type: "set_site", site: currentSite }));
-      }
-    });
-
-    // =========================
-    // 🔥 MAPA (crear marcadores iniciales)
-    // =========================
-    sites.forEach(s => {
-      if (s.lat && s.lon) {
-        updateMarker(s.id, s.lat, s.lon, s.name, null, null);
-      }
-    });
-
-    // 🔥 centrar en el primero
-    if (sites[0]?.lat && sites[0]?.lon) {
-      map.setView([sites[0].lat, sites[0].lon], 7);
-    }
-
-    startWS();
-  }
-
-  function startWS() {
-    const protocol = (location.protocol === "https:") ? "wss" : "ws";
-    ws = new WebSocket(`${protocol}://${location.host}/ws`);
-
-    ws.onopen = () => {
-      setConn(true);
-      if (currentSite) {
-        ws.send(JSON.stringify({ type: "set_site", site: currentSite }));
-      }
+  <script>
+
+    const firebaseConfig = {
+      apiKey: "AIzaSyCXNKG8wb5IsTLaL6WLPIiRCPtuF4MIlLo",
+      authDomain: "rio-ebro.firebaseapp.com",
+      projectId: "rio-ebro",
+      storageBucket: "rio-ebro.firebasestorage.app",
+      messagingSenderId: "867230279445",
+      appId: "1:867230279445:web:5afb433821606547276b1c",
+      measurementId: "G-N9PV3N2M2J"
     };
 
-    ws.onclose = () => setConn(false);
-    ws.onerror = (e) => console.log("WS error", e);
+    // Initialize Firebase
+    firebase.initializeApp(firebaseConfig);
+    const messaging = firebase.messaging();
 
-    ws.onmessage = (ev) => {
-      const data = JSON.parse(ev.data);
+    const connDot = document.getElementById("connDot");
+    const connText = document.getElementById("connText");
+    const siteSelect = document.getElementById("siteSelect");
+    const titleEl = document.getElementById("title");
 
-      if (data.site_name) {
-        titleEl.textContent = `Dashboard Río Ebro – ${data.site_name}`;
-      }
+    const sourceEl = document.getElementById("source");
+    const tsEl = document.getElementById("ts");
+    const refEl = document.getElementById("ref");
+    const isNewEl = document.getElementById("isNew");
 
-      sourceEl.textContent = data.source ?? "-";
-      tsEl.textContent = data.ts ?? "-";
-      refEl.textContent = data.refreshed_at ?? "-";
-      isNewEl.textContent =
-        (data.is_new === true) ? "SI" :
-        (data.is_new === false) ? "NO" : "-";
+    const nivelEl = document.getElementById("nivel");
+    const caudalEl = document.getElementById("caudal");
+    const tnEl = document.getElementById("tn");
+    const tcEl = document.getElementById("tc");
 
-      const nivel = toNum(data.nivel_m);
-      const caudal = toNum(data.caudal_m3s);
+    const estadoDot = document.getElementById("estadoDot");
+    const estadoTxt = document.getElementById("estadoTxt");
 
-      nivelEl.textContent = (nivel === null) ? "-" : fmt(nivel, 2);
-      caudalEl.textContent = (caudal === null) ? "-" : fmt(caudal, 1);
+    const aemetRef = document.getElementById("aemetRef");
+    const aemetErr = document.getElementById("aemetErr");
 
-      tnEl.textContent = data.tendencia_nivel ?? "-";
-      tcEl.textContent = data.tendencia_caudal ?? "-";
+    const mm6sum = document.getElementById("mm6sum");
+    const mm24sum = document.getElementById("mm24sum");
+    const mm6max = document.getElementById("mm6max");
+    const mm24max = document.getElementById("mm24max");
 
-      setEstadoRio(nivel);
+    const p6 = document.getElementById("p6");
+    const p24 = document.getElementById("p24");
+    const barP6 = document.getElementById("barP6");
+    const barP24 = document.getElementById("barP24");
 
-      aemetRef.textContent = data.aemet_refreshed_at ?? "-";
+    const mmTable = document.getElementById("mmTable");
+    const rainDot = document.getElementById("rainDot");
+    const rainState = document.getElementById("rainState");
 
-      const err = data.aemet_error ?? "";
-      if (err) {
-        aemetErr.style.display = "block";
-        aemetErr.textContent = `Error AEMET: ${err}`;
-      } else {
-        aemetErr.style.display = "none";
-        aemetErr.textContent = "";
-      }
+    const iaRef = document.getElementById("iaRef");
+    const iaErr = document.getElementById("iaErr");
+    const iaState = document.getElementById("iaState");
 
-      mm6sum.textContent = data.aemet_mm_6h_sum ?? "-";
-      mm24sum.textContent = data.aemet_mm_24h_sum ?? "-";
-      mm6max.textContent = data.aemet_mm_6h_max ?? "-";
-      mm24max.textContent = data.aemet_mm_24h_max ?? "-";
+    const NIVEL_WARN = 2.0;
+    const NIVEL_BAD  = 3.0;
 
-      p6.textContent = data.aemet_prob_6h_max ?? "-";
-      p24.textContent = data.aemet_prob_24h_max ?? "-";
+    const IA_WARN = 2.5;
+    const IA_BAD = 3.5;
 
-      setProbBars(data.aemet_prob_6h_max, data.aemet_prob_24h_max);
-      renderMmTable(data.aemet_mm_next_hours);
-      setRainState(data.aemet_mm_24h_sum, data.aemet_prob_24h_max);
+    let predChart = null;
+    let ws = null;
+    let currentSite = null;
 
-      window._lastIaRef = data.ia_refreshed_at ?? "-";
-      // console.log("IA ERROR:", data.ia_error);
-      // console.log("IA PRED:", data.pred_semana);
-      updateIAState(data.ia_error, data.pred_semana);
-      updatePredChart(data.pred_semana);
-
-      // 🔥 ACTUALIZAR MAPA EN TIEMPO REAL
-      if (data.site_id && data.lat && data.lon) {
-        const nivel = toNum(data.nivel_m);
-        const caudal = toNum(data.caudal_m3s);
-        updateMarker(
-          data.site_id,
-          data.lat,
-          data.lon,
-          data.site_name || data.site_id,
-          nivel,
-          caudal
-        );
-      }
-    };
-  }
-
-  // =========================
-  // MAPA
-  // =========================
-
-  function refreshAllMarkers() {
-    Object.keys(markers).forEach(id => {
-      const m = markers[id];
-
-      const nivelText = m.getPopup().getContent();
-      const nivelMatch = nivelText.match(/Nivel: ([\d.]+)/);
-      const nivel = nivelMatch ? parseFloat(nivelMatch[1]) : null;
-
-      const latlng = m.getLatLng();
-      const nombre = m.getPopup().getContent().split("<br>")[0].replace("<b>", "").replace("</b>", "");
-
-      updateMarker(id, latlng.lat, latlng.lng, nombre, nivel, null);
-    });
-  }
-
-  const map = L.map('map').setView([41.65, -0.88], 6);
-
-  L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
-    attribution: '&copy; OpenStreetMap contributors'
-  }).addTo(map);
-
-  let markers = {}; // guardar marcadores por id
-
-  function getColorNivel(nivel) {
-    if (nivel === null || nivel === undefined) return "#999";
-    if (nivel >= 3) return "#ef4444";   // rojo
-    if (nivel >= 2) return "#f59e0b";   // naranja
-    return "#22c55e";                   // verde
-  }
-
-  function updateMarker(siteId, lat, lon, nombre, nivel, caudal) {
-    const color = getColorNivel(nivel);
-    const isActive = (siteId === currentSite);
-
-    const radius = isActive ? 12 : 8;
-    const weight = isActive ? 3 : 1.5;
-
-    const popupContent = `
-      <b>${nombre}</b><br>
-      Nivel: ${nivel ?? "-"} m<br>
-      Caudal: ${caudal ?? "-"} m³/s<br>
-      ${isActive ? "<span style='color:#22c55e'>● Seleccionado</span>" : ""}
-    `;
-
-    if (markers[siteId]) {
-      // 🔄 actualizar marcador existente
-      markers[siteId].setStyle({
-        color: color,
-        fillColor: color,
-        radius: radius,
-        weight: weight
-      });
-
-      markers[siteId].setPopupContent(popupContent);
-
-    } else {
-      // 🆕 crear marcador
-      markers[siteId] = L.circleMarker([lat, lon], {
-        radius: radius,
-        color: color,
-        fillColor: color,
-        fillOpacity: 0.85,
-        weight: weight
-      })
-      .addTo(map)
-      .bindPopup(popupContent);
-
-      // 🔥 CLICK EN MAPA → CAMBIAR MUNICIPIO
-      markers[siteId].on("click", () => {
-        currentSite = siteId;
-
-        // sincronizar selector
-        siteSelect.value = siteId;
-
-        // centrar mapa
-        map.setView([lat, lon], 10);
-
-        // enviar al backend
-        if (ws && ws.readyState === WebSocket.OPEN) {
-          ws.send(JSON.stringify({ type: "set_site", site: siteId }));
-        }
-
-        // 🔄 refrescar todos los marcadores (para resaltar activo)
-        refreshAllMarkers();
-      });
+    function setConn(isUp) {
+      connDot.className = "dot " + (isUp ? "ok" : "");
+      connText.textContent = isUp ? "Conectado" : "Desconectado";
     }
-  }
 
+    function fmt(x, decimals = 2) {
+      if (x === null || x === undefined) return "-";
+      const n = Number(x);
+      if (Number.isNaN(n)) return "-";
+      return n.toFixed(decimals);
+    }
 
-  loadSites();
-  
-  async function initNotifications() {
-    try {
-      console.log("🔔 Iniciando notificaciones...");
+    function toNum(value) {
+      const n = Number(value);
+      return Number.isFinite(n) ? n : null;
+    }
 
-      const permission = await Notification.requestPermission();
-      console.log("Permiso:", permission);
-
-      if (permission !== "granted") {
-        console.log("❌ Permiso denegado");
+    function setEstadoRio(nivel) {
+      if (typeof nivel !== "number" || !Number.isFinite(nivel)) {
+        estadoDot.className = "dot";
+        estadoTxt.textContent = "-";
         return;
       }
 
-      // 🔥 REGISTRAR SERVICE WORKER (CLAVE)
-      if ('serviceWorker' in navigator) {
-        const registration = await navigator.serviceWorker.register('/firebase-messaging-sw.js');
-        console.log("✅ Service Worker registrado:", registration);
-      }
-
-      // esperar a que el SW esté activo
-      const registration = await navigator.serviceWorker.ready;
-
-      const token = await messaging.getToken({
-        vapidKey: "BCFznYCtRHRklZcr-XJ2jjnjvzIFV0OBPqcZXdZWJdJI7YT8GClCn-uc8Qi1fFT_zyicRQNrRxG7qo6uKJwWGng",
-        serviceWorkerRegistration: registration
-      });
-
-      if (!token) {
-        console.log("❌ No se generó token");
+      if (nivel >= NIVEL_BAD) {
+        estadoDot.className = "dot bad";
+        estadoTxt.textContent = "ALTO (visual)";
+      } else if (nivel >= NIVEL_WARN) {
+        estadoDot.className = "dot warn";
+        estadoTxt.textContent = "MEDIO (visual)";
       } else {
-        console.log("🔥 TOKEN:", token);
+        estadoDot.className = "dot ok";
+        estadoTxt.textContent = "Normal";
+      }
+    }
+
+    function clampProb(v) {
+      if (v === null || v === undefined) return null;
+      const n = Number(v);
+      if (Number.isNaN(n)) return null;
+      return Math.max(0, Math.min(100, n));
+    }
+
+    function setProbBars(v6, v24) {
+      const c6 = clampProb(v6);
+      const c24 = clampProb(v24);
+
+      barP6.style.width = (c6 === null ? "0%" : `${c6}%`);
+      barP24.style.width = (c24 === null ? "0%" : `${c24}%`);
+    }
+
+    function renderMmTable(list) {
+      mmTable.innerHTML = "";
+
+      if (!Array.isArray(list)) return;
+
+      for (const row of list.slice(0, 12)) {
+        const tr = document.createElement("tr");
+        tr.innerHTML = `
+          <td class="mono">${row?.hora ?? "-"}</td>
+          <td>${row?.mm ?? "-"}</td>
+        `;
+        mmTable.appendChild(tr);
+      }
+    }
+
+    function setRainState(mm24, p24) {
+      const mm = Number(mm24);
+      const prob = clampProb(p24);
+
+      if (Number.isNaN(mm) && prob === null) {
+        rainDot.className = "dot";
+        rainState.textContent = "-";
+        return;
       }
 
-      await fetch("/api/token", {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json"
-        },
-        body: JSON.stringify({ token })
+      if ((prob !== null && prob >= 70) || (!Number.isNaN(mm) && mm >= 10)) {
+        rainDot.className = "dot bad";
+        rainState.textContent = "Riesgo lluvia alto (visual)";
+      } else if ((prob !== null && prob >= 40) || (!Number.isNaN(mm) && mm >= 3)) {
+        rainDot.className = "dot warn";
+        rainState.textContent = "Riesgo lluvia medio (visual)";
+      } else {
+        rainDot.className = "dot ok";
+        rainState.textContent = "Riesgo lluvia bajo (visual)";
+      }
+    }
+
+    function limpiarPred(pred) {
+      if (!Array.isArray(pred)) return [];
+
+      return pred
+        .map((p) => {
+          if (!Array.isArray(p) || p.length < 2) return null;
+
+          const nivel = toNum(p[0]);
+          const caudal = toNum(p[1]);
+
+          if (nivel === null && caudal === null) return null;
+
+          return [nivel, caudal];
+        })
+        .filter(Boolean);
+    }
+
+    function evaluarRiesgoIA(pred) {
+      const limpia = limpiarPred(pred);
+
+      if (limpia.length === 0) {
+        return { texto: "Sin datos", clase: "" };
+      }
+
+      let maxNivel = -Infinity;
+      let diaMax = -1;
+
+      limpia.forEach((p, i) => {
+        const nivel = p[0];
+        if (typeof nivel === "number" && nivel > maxNivel) {
+          maxNivel = nivel;
+          diaMax = i;
+        }
       });
 
-    } catch (err) {
-      console.error("❌ ERROR Firebase:", err);
-    }
-  }
+      if (!Number.isFinite(maxNivel)) {
+        return { texto: "Sin datos", clase: "" };
+      }
 
-</script>
+      if (maxNivel >= IA_BAD) {
+        return {
+          texto: `Riesgo alto en ${diaMax + 1} días`,
+          clase: "bad"
+        };
+      }
+
+      if (maxNivel >= IA_WARN) {
+        return {
+          texto: `Posible crecida en ${diaMax + 1} días`,
+          clase: "warn"
+        };
+      }
+
+      return {
+        texto: "Sin riesgo relevante",
+        clase: "ok"
+      };
+    }
+
+    function colorNivel(v) {
+      if (v === null || v === undefined || !Number.isFinite(v)) {
+        return "rgba(255,255,255,.35)";
+      }
+      if (v >= IA_BAD) return "#ef4444";
+      if (v >= IA_WARN) return "#f59e0b";
+      return "#22c55e";
+    }
+
+    function updatePredChart(pred) {
+      const canvas = document.getElementById("predChart");
+      if (!canvas) return;
+
+      const limpia = limpiarPred(pred);
+
+      if (limpia.length === 0) {
+        if (predChart) predChart.destroy();
+        return;
+      }
+
+      const labels = limpia.map((_, i) => `Día ${i+1}`);
+
+      const nivel = limpia.map(p => p[0]);
+      const caudal = limpia.map(p => p[1]);
+
+      // 🔥 FILTRO DE VALORES EXTREMOS (MUY IMPORTANTE)
+      function clampArray(arr, min, max) {
+        return arr.map(v => {
+          if (v === null) return null;
+          return Math.max(min, Math.min(max, v));
+        });
+      }
+
+      const nivelClean = clampArray(nivel, 0, 10);     // niveles reales
+      const caudalClean = clampArray(caudal, 0, 2000); // ajusta a tu río
+
+      // 🔥 ESCALAS DINÁMICAS
+      const maxNivel = Math.max(...nivelClean.filter(v => v !== null));
+      const maxCaudal = Math.max(...caudalClean.filter(v => v !== null));
+
+      if (predChart) predChart.destroy();
+
+      predChart = new Chart(canvas, {
+        type: "line",
+        data: {
+          labels,
+          datasets: [
+            {
+              label: "Nivel (m)",
+              data: nivelClean,
+              borderWidth: 3,
+              tension: 0.35,
+              pointRadius: 5,
+              borderColor: "#22c55e",
+              yAxisID: "yNivel"
+            },
+            {
+              label: "Caudal (m³/s)",
+              data: caudalClean,
+              borderWidth: 2,
+              tension: 0.35,
+              borderDash: [6,6],
+              borderColor: "#7c3aed",
+              yAxisID: "yCaudal"
+            }
+          ]
+        },
+        options: {
+          responsive: true,
+          maintainAspectRatio: false,
+
+          plugins: {
+            legend: {
+              labels: { color: "white" }
+            }
+          },
+
+          scales: {
+            yNivel: {
+              type: "linear",
+              position: "left",
+              min: 0,
+              max: Math.ceil(maxNivel + 0.5),
+              ticks: {
+                color: "white",
+                callback: v => v.toFixed(1)
+              },
+              title: {
+                display: true,
+                text: "Nivel (m)",
+                color: "white"
+              }
+            },
+
+            yCaudal: {
+              type: "linear",
+              position: "right",
+              min: 0,
+              max: Math.ceil(maxCaudal * 1.2),
+              ticks: {
+                color: "white",
+                callback: v => Math.round(v)
+              },
+              grid: { drawOnChartArea: false },
+              title: {
+                display: true,
+                text: "Caudal (m³/s)",
+                color: "white"
+              }
+            }
+          }
+        }
+      });
+    }
+
+    function updateIAState(error, pred) {
+      iaRef.textContent = window._lastIaRef ?? "-";
+
+      if (error) {
+        iaErr.style.display = "block";
+        iaErr.textContent = `Error IA: ${error}`;
+        iaState.textContent = "Error";
+        return;
+      }
+
+      iaErr.style.display = "none";
+      iaErr.textContent = "";
+
+      const limpia = limpiarPred(pred);
+
+      if (limpia.length > 0) {
+        const riesgo = evaluarRiesgoIA(limpia);
+
+        if (riesgo.clase === "bad") {
+          iaState.textContent = "Riesgo alto";
+        } else if (riesgo.clase === "warn") {
+          iaState.textContent = "Vigilancia";
+        } else if (riesgo.clase === "ok") {
+          iaState.textContent = "Estable";
+        } else {
+          iaState.textContent = "Disponible";
+        }
+      } else {
+        iaState.textContent = "Sin datos";
+      }
+    }
+
+    let sitesGlobal = []; // 🔥 guardar sitios para mapa
+
+    async function loadSites() {
+      const res = await fetch("/api/sites");
+      const sites = await res.json();
+
+      sitesGlobal = sites; // 🔥 guardar para usar en mapa
+
+      // =========================
+      // SELECTOR
+      // =========================
+      siteSelect.innerHTML = sites
+        .map(s => `<option value="${s.id}">${s.name}</option>`)
+        .join("");
+
+      currentSite = sites[0]?.id ?? null;
+
+      siteSelect.addEventListener("change", () => {
+        currentSite = siteSelect.value;
+
+        // 🔥 centrar mapa al seleccionar
+        const s = sitesGlobal.find(x => x.id === currentSite);
+        if (s && s.lat && s.lon) {
+          map.setView([s.lat, s.lon], 10);
+        }
+
+        if (ws && ws.readyState === WebSocket.OPEN) {
+          ws.send(JSON.stringify({ type: "set_site", site: currentSite }));
+        }
+      });
+
+      // =========================
+      // 🔥 MAPA (crear marcadores iniciales)
+      // =========================
+      sites.forEach(s => {
+        if (s.lat && s.lon) {
+          updateMarker(s.id, s.lat, s.lon, s.name, null, null);
+        }
+      });
+
+      // 🔥 centrar en el primero
+      if (sites[0]?.lat && sites[0]?.lon) {
+        map.setView([sites[0].lat, sites[0].lon], 7);
+      }
+
+      startWS();
+    }
+
+    function startWS() {
+      const protocol = (location.protocol === "https:") ? "wss" : "ws";
+      ws = new WebSocket(`${protocol}://${location.host}/ws`);
+
+      ws.onopen = () => {
+        setConn(true);
+        if (currentSite) {
+          ws.send(JSON.stringify({ type: "set_site", site: currentSite }));
+        }
+      };
+
+      ws.onclose = () => setConn(false);
+      ws.onerror = (e) => console.log("WS error", e);
+
+      ws.onmessage = (ev) => {
+        const data = JSON.parse(ev.data);
+
+        if (data.site_name) {
+          titleEl.textContent = `Dashboard Río Ebro – ${data.site_name}`;
+        }
+
+        sourceEl.textContent = data.source ?? "-";
+        tsEl.textContent = data.ts ?? "-";
+        refEl.textContent = data.refreshed_at ?? "-";
+        isNewEl.textContent =
+          (data.is_new === true) ? "SI" :
+          (data.is_new === false) ? "NO" : "-";
+
+        const nivel = toNum(data.nivel_m);
+        const caudal = toNum(data.caudal_m3s);
+
+        nivelEl.textContent = (nivel === null) ? "-" : fmt(nivel, 2);
+        caudalEl.textContent = (caudal === null) ? "-" : fmt(caudal, 1);
+
+        tnEl.textContent = data.tendencia_nivel ?? "-";
+        tcEl.textContent = data.tendencia_caudal ?? "-";
+
+        setEstadoRio(nivel);
+
+        aemetRef.textContent = data.aemet_refreshed_at ?? "-";
+
+        const err = data.aemet_error ?? "";
+        if (err) {
+          aemetErr.style.display = "block";
+          aemetErr.textContent = `Error AEMET: ${err}`;
+        } else {
+          aemetErr.style.display = "none";
+          aemetErr.textContent = "";
+        }
+
+        mm6sum.textContent = data.aemet_mm_6h_sum ?? "-";
+        mm24sum.textContent = data.aemet_mm_24h_sum ?? "-";
+        mm6max.textContent = data.aemet_mm_6h_max ?? "-";
+        mm24max.textContent = data.aemet_mm_24h_max ?? "-";
+
+        p6.textContent = data.aemet_prob_6h_max ?? "-";
+        p24.textContent = data.aemet_prob_24h_max ?? "-";
+
+        setProbBars(data.aemet_prob_6h_max, data.aemet_prob_24h_max);
+        renderMmTable(data.aemet_mm_next_hours);
+        setRainState(data.aemet_mm_24h_sum, data.aemet_prob_24h_max);
+
+        window._lastIaRef = data.ia_refreshed_at ?? "-";
+        // console.log("IA ERROR:", data.ia_error);
+        console.log("IA PRED:", data.pred_semana);
+        updateIAState(data.ia_error, data.pred_semana);
+        updatePredChart(data.pred_semana);
+
+        // 🔥 ACTUALIZAR MAPA EN TIEMPO REAL
+        if (data.site_id && data.lat && data.lon) {
+          const nivel = toNum(data.nivel_m);
+          const caudal = toNum(data.caudal_m3s);
+          updateMarker(
+            data.site_id,
+            data.lat,
+            data.lon,
+            data.site_name || data.site_id,
+            nivel,
+            caudal
+          );
+        }
+      };
+    }
+
+    // =========================
+    // MAPA
+    // =========================
+
+    function refreshAllMarkers() {
+      Object.keys(markers).forEach(id => {
+        const m = markers[id];
+
+        const nivelText = m.getPopup().getContent();
+        const nivelMatch = nivelText.match(/Nivel: ([\d.]+)/);
+        const nivel = nivelMatch ? parseFloat(nivelMatch[1]) : null;
+
+        const latlng = m.getLatLng();
+        const nombre = m.getPopup().getContent().split("<br>")[0].replace("<b>", "").replace("</b>", "");
+
+        updateMarker(id, latlng.lat, latlng.lng, nombre, nivel, null);
+      });
+    }
+
+    const map = L.map('map').setView([41.65, -0.88], 6);
+
+    L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+      attribution: '&copy; OpenStreetMap contributors'
+    }).addTo(map);
+
+    let markers = {}; // guardar marcadores por id
+
+    function getColorNivel(nivel) {
+      if (nivel === null || nivel === undefined) return "#999";
+      if (nivel >= 3) return "#ef4444";   // rojo
+      if (nivel >= 2) return "#f59e0b";   // naranja
+      return "#22c55e";                   // verde
+    }
+
+    function updateMarker(siteId, lat, lon, nombre, nivel, caudal) {
+      const color = getColorNivel(nivel);
+      const isActive = (siteId === currentSite);
+
+      const radius = isActive ? 12 : 8;
+      const weight = isActive ? 3 : 1.5;
+
+      const popupContent = `
+        <b>${nombre}</b><br>
+        Nivel: ${nivel ?? "-"} m<br>
+        Caudal: ${caudal ?? "-"} m³/s<br>
+        ${isActive ? "<span style='color:#22c55e'>● Seleccionado</span>" : ""}
+      `;
+
+      if (markers[siteId]) {
+        // 🔄 actualizar marcador existente
+        markers[siteId].setStyle({
+          color: color,
+          fillColor: color,
+          radius: radius,
+          weight: weight
+        });
+
+        markers[siteId].setPopupContent(popupContent);
+
+      } else {
+        // 🆕 crear marcador
+        markers[siteId] = L.circleMarker([lat, lon], {
+          radius: radius,
+          color: color,
+          fillColor: color,
+          fillOpacity: 0.85,
+          weight: weight
+        })
+        .addTo(map)
+        .bindPopup(popupContent);
+
+        // 🔥 CLICK EN MAPA → CAMBIAR MUNICIPIO
+        markers[siteId].on("click", () => {
+          currentSite = siteId;
+
+          // sincronizar selector
+          siteSelect.value = siteId;
+
+          // centrar mapa
+          map.setView([lat, lon], 10);
+
+          // enviar al backend
+          if (ws && ws.readyState === WebSocket.OPEN) {
+            ws.send(JSON.stringify({ type: "set_site", site: siteId }));
+          }
+
+          // 🔄 refrescar todos los marcadores (para resaltar activo)
+          refreshAllMarkers();
+        });
+      }
+    }
+
+
+    loadSites();
+    
+    async function initNotifications() {
+      try {
+        console.log("🔔 Iniciando notificaciones...");
+
+        const permission = await Notification.requestPermission();
+        console.log("Permiso:", permission);
+
+        if (permission !== "granted") {
+          console.log("❌ Permiso denegado");
+          return;
+        }
+
+        // 🔥 REGISTRAR SERVICE WORKER (CLAVE)
+        if ('serviceWorker' in navigator) {
+          const registration = await navigator.serviceWorker.register('/firebase-messaging-sw.js');
+          console.log("✅ Service Worker registrado:", registration);
+        }
+
+        // esperar a que el SW esté activo
+        const registration = await navigator.serviceWorker.ready;
+
+        const token = await messaging.getToken({
+          vapidKey: "BCFznYCtRHRklZcr-XJ2jjnjvzIFV0OBPqcZXdZWJdJI7YT8GClCn-uc8Qi1fFT_zyicRQNrRxG7qo6uKJwWGng",
+          serviceWorkerRegistration: registration
+        });
+
+        if (!token) {
+          console.log("❌ No se generó token");
+        } else {
+          console.log("🔥 TOKEN:", token);
+        }
+
+        await fetch("/api/token", {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json"
+          },
+          body: JSON.stringify({ token })
+        });
+
+      } catch (err) {
+        console.error("❌ ERROR Firebase:", err);
+      }
+    }
+
+    let alertsEnabled = false;
+
+    async function toggleAlerts() {
+      const btn = document.getElementById("alertBtn");
+
+      if (!alertsEnabled) {
+        // 🔔 ACTIVAR
+        await initNotifications();
+
+        alertsEnabled = true;
+        btn.classList.add("active");
+        btn.textContent = "✅ Alertas activadas";
+
+        localStorage.setItem("alerts", "on");
+
+      } else {
+        // 🔕 DESACTIVAR
+        alertsEnabled = false;
+        btn.classList.remove("active");
+        btn.textContent = "🔔 Activar alertas";
+
+        localStorage.setItem("alerts", "off");
+      }
+    }
+
+    window.addEventListener("load", () => {
+    const saved = localStorage.getItem("alerts");
+    const btn = document.getElementById("alertBtn");
+
+    if (saved === "on") {
+      alertsEnabled = true;
+      btn.classList.add("active");
+      btn.textContent = "✅ Alertas activadas";
+      
+    }
+  });
+
+  </script>
 
 </body>
 </html>
