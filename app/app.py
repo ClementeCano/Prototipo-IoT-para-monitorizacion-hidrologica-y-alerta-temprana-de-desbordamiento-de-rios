@@ -12,8 +12,7 @@ if not firebase_admin._apps:
 
     if firebase_key:
         try:
-            cred_dict = json.loads(firebase_key)
-            cred = credentials.Certificate(cred_dict)
+            cred = credentials.Certificate(firebase_key)
             firebase_admin.initialize_app(cred)
             print("✅ Firebase inicializado")
         except Exception as e:
@@ -36,15 +35,15 @@ import pandas as pd
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect
 from fastapi.responses import FileResponse, HTMLResponse, JSONResponse
 
-from app.api.saih_opendata import fetch_saih_signals
-from app.api.aemet_opendata import (
+from api.saih_opendata import fetch_saih_signals
+from api.aemet_opendata import (
     fetch_aemet_municipio_horaria,
     extract_rain_forecast_mm,
     extract_prob_precip_summary,
 )
 
-from .prediccion_individual import predecir_semana_municipio
-from app.core.config import SITES, collect_all_tags
+from prediccion_individual import predecir_semana_municipio
+from core.config import SITES, collect_all_tags
 
 from fastapi.staticfiles import StaticFiles
 
