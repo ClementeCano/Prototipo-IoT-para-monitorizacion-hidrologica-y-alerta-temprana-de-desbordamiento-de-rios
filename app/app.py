@@ -18,6 +18,7 @@ if not firebase_admin._apps:
             print("✅ Firebase inicializado")
         except Exception as e:
             print("❌ Error Firebase:", e)
+            traceback.print_exc()
     else:
         print("⚠️ No FIREBASE_CREDENTIALS en entorno")
 
@@ -42,7 +43,7 @@ from app.api.aemet_opendata import (
     extract_prob_precip_summary,
 )
 
-from app.prediccion_individual import predecir_semana_municipio
+from .prediccion_individual import predecir_semana_municipio
 from app.core.config import SITES, collect_all_tags
 
 from fastapi.staticfiles import StaticFiles
