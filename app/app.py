@@ -247,7 +247,7 @@ async def refresh_ia_for_site(site_id: str) -> bool:
             "pred_semana": [],
         }
 
-        traceback.print_exc()
+        #traceback.print_exc()
         return False
 
 async def refresh_aemet_for_site(site_id: str, force: bool = True) -> bool:
