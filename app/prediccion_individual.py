@@ -1,7 +1,6 @@
 from pathlib import Path
 import numpy as np
 import pickle
-from tensorflow.keras.models import load_model
 import pandas as pd
 
 BASE_DIR = Path(__file__).resolve().parent
@@ -29,6 +28,7 @@ def predecir_semana_municipio(site_id: str):
         # =========================
         # CARGA MODELO Y SCALERS
         # =========================
+        from tensorflow.keras.models import load_model
         modelo = load_model(modelo_path, compile=False)
 
         with open(scaler_x_path, "rb") as f:
