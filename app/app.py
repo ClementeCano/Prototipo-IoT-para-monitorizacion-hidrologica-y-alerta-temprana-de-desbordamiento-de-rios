@@ -20,7 +20,7 @@ if not firebase_admin._apps:
             print("✅ Firebase inicializado")
         except Exception as e:
             print("❌ Error Firebase:", e)
-            traceback.print_exc()
+         
     else:
         print("⚠️ No FIREBASE_CREDENTIALS en entorno")
 
