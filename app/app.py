@@ -1,3 +1,4 @@
+import base64
 import json
 import os
 from dotenv import load_dotenv
@@ -8,19 +9,21 @@ import firebase_admin
 from firebase_admin import credentials, messaging
 
 
+
 if not firebase_admin._apps:
     firebase_key = os.getenv("FIREBASE_CREDENTIALS")
 
     if firebase_key:
         try:
 
-            cred_dict = json.loads(firebase_key)
-            cred = credentials.Certificate(cred_dict)
+            # cred_dict = json.loads(firebase_key)
+            # cred = credentials.Certificate(cred_dict)
+            cred = credentials.Certificate(firebase_key)
             firebase_admin.initialize_app(cred)
             print("✅ Firebase inicializado")
         except Exception as e:
             print("❌ Error Firebase:", e)
-            traceback.print_exc()
+            
          
     else:
         print("⚠️ No FIREBASE_CREDENTIALS en entorno")
@@ -35,18 +38,28 @@ from typing import Dict, Any, Set, Optional
 
 import requests
 import pandas as pd
-from fastapi import FastAPI, WebSocket, WebSocketDisconnect
+from fastapi import FastAPI, Response, WebSocket, WebSocketDisconnect
 from fastapi.responses import FileResponse, HTMLResponse, JSONResponse
 
-from app.api.saih_opendata import fetch_saih_signals
-from app.api.aemet_opendata import (
+# from app.api.saih_opendata import fetch_saih_signals
+# from app.api.aemet_opendata import (
+#     fetch_aemet_municipio_horaria,
+#     extract_rain_forecast_mm,
+#     extract_prob_precip_summary,
+# )
+
+# from app.prediccion_individual import predecir_semana_municipio
+# from app.core.config import SITES, collect_all_tags
+
+from api.saih_opendata import fetch_saih_signals
+from api.aemet_opendata import (
     fetch_aemet_municipio_horaria,
     extract_rain_forecast_mm,
     extract_prob_precip_summary,
 )
 
-from app.prediccion_individual import predecir_semana_municipio
-from app.core.config import SITES, collect_all_tags
+from prediccion_individual import predecir_semana_municipio
+from core.config import SITES, collect_all_tags
 
 from fastapi.staticfiles import StaticFiles
 
@@ -174,7 +187,7 @@ def test_alert():
 
 @app.get("/firebase-messaging-sw.js")
 def sw():
-    return FileResponse((BASE_DIR / "firebase-messaging-sw.js").read_text(encoding="utf-8"))
+    return Response(((BASE_DIR / "firebase-messaging-sw.js").read_text(encoding="utf-8")), media_type="application/javascript")
 
 
 # ---------------------------
@@ -511,28 +524,3 @@ async def on_startup():
     asyncio.create_task(poll_saih_loop())
     asyncio.create_task(poll_aemet_loop())
     asyncio.create_task(poll_ia_loop())
-
-
-# <script type="module">
-#   // Import the functions you need from the SDKs you need
-#   import { initializeApp } from "https://www.gstatic.com/firebasejs/12.12.1/firebase-app.js";
-#   import { getAnalytics } from "https://www.gstatic.com/firebasejs/12.12.1/firebase-analytics.js";
-#   // TODO: Add SDKs for Firebase products that you want to use
-#   // https://firebase.google.com/docs/web/setup#available-libraries
-
-#   // Your web app's Firebase configuration
-#   // For Firebase JS SDK v7.20.0 and later, measurementId is optional
-#   const firebaseConfig = {
-#     apiKey: "AIzaSyCXNKG8wb5IsTLaL6WLPIiRCPtuF4MIlLo",
-#     authDomain: "rio-ebro.firebaseapp.com",
-#     projectId: "rio-ebro",
-#     storageBucket: "rio-ebro.firebasestorage.app",
-#     messagingSenderId: "867230279445",
-#     appId: "1:867230279445:web:5afb433821606547276b1c",
-#     measurementId: "G-N9PV3N2M2J"
-#   };
-
-#   // Initialize Firebase
-#   const app = initializeApp(firebaseConfig);
-#   const analytics = getAnalytics(app);
-# </script>

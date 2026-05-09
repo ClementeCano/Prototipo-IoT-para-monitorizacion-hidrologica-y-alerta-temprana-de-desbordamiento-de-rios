@@ -1,11 +1,22 @@
-from pathlib import Path
-import pandas as pd
-import numpy as np
-import pickle
-import matplotlib.pyplot as plt
+import os
+os.environ["TF_CPP_MIN_LOG_LEVEL"] = "2"
+os.environ["TF_ENABLE_ONEDNN_OPTS"] = "0"
 
-from sklearn.metrics import mean_absolute_error, mean_squared_error
-from tensorflow.keras.models import load_model
+import numpy as np
+import pandas as pd
+import pickle
+
+from pathlib import Path
+
+from sklearn.metrics import (
+    mean_absolute_error,
+    mean_squared_error,
+    precision_score,
+    recall_score,
+    f1_score
+)
+
+from umbrales import cargar_umbrales
 
 # =========================
 # CONFIG
@@ -14,207 +25,295 @@ BASE_DIR = Path(__file__).resolve().parent
 
 DATA_DIR = BASE_DIR / "datasets_modelo_municipios"
 MODEL_DIR = BASE_DIR / "modelos_municipios"
-GRAFICAS_DIR = BASE_DIR / "graficas_municipios"
-GRAFICAS_DIR.mkdir(exist_ok=True)
 
 VENTANA = 14
 HORIZONTE = 7
-UMBRAL = 3.0  # umbral desbordamiento
+
+# 🔥 limitar evaluación para no tardar siglos
+MAX_ITERS = 50
+
+UMBRALES = cargar_umbrales()
 
 # =========================
-# VENTANAS
+# CARGAR MODELO
 # =========================
-def crear_ventanas(data, nivel, caudal, ventana, horizonte):
-    X, y_nivel, y_caudal = [], [], []
+def cargar_modelo_municipio(municipio):
 
-    for i in range(len(data) - ventana - horizonte + 1):
-        X.append(data[i:i+ventana])
-        y_nivel.append(nivel[i+ventana:i+ventana+horizonte])
-        y_caudal.append(caudal[i+ventana:i+ventana+horizonte])
+    carpeta = MODEL_DIR / municipio
 
-    return np.array(X), np.array(y_nivel), np.array(y_caudal)
+    from tensorflow.keras.models import load_model
+
+    print("👉 cargando modelo...")
+
+    modelo = load_model(
+        carpeta / "modelo.keras",
+        compile=False
+    )
+
+    scaler_X = pickle.load(open(carpeta / "scaler_X.pkl", "rb"))
+    scaler_nivel = pickle.load(open(carpeta / "scaler_nivel.pkl", "rb"))
+    scaler_caudal = pickle.load(open(carpeta / "scaler_caudal.pkl", "rb"))
+    features = pickle.load(open(carpeta / "features.pkl", "rb"))
+
+    print("✅ modelo cargado")
+
+    return (
+        modelo,
+        scaler_X,
+        scaler_nivel,
+        scaler_caudal,
+        features
+    )
+
+
+# =========================
+# PREDICCIÓN RÁPIDA
+# =========================
+def predecir_rapido(
+    modelo,
+    scaler_X,
+    scaler_nivel,
+    scaler_caudal,
+    features,
+    ventana_df
+):
+
+    X_df = ventana_df.copy()
+
+    # asegurar mismas columnas
+    for col in features:
+        if col not in X_df.columns:
+            X_df[col] = 0
+
+    # mismo orden exacto
+    X_df = X_df[features]
+
+    X = scaler_X.transform(X_df.values)
+
+    X = X.reshape(
+        1,
+        X.shape[0],
+        X.shape[1]
+    )
+
+    # 🔥 sin spam consola
+    pred_nivel_scaled, pred_caudal_scaled = modelo.predict(
+        X,
+        verbose=0
+    )
+
+    pred_nivel = scaler_nivel.inverse_transform(
+        pred_nivel_scaled
+    )[0]
+
+    pred_caudal = np.expm1(
+        scaler_caudal.inverse_transform(
+            pred_caudal_scaled
+        )[0]
+    )
+
+    return pred_nivel, pred_caudal
+
 
 # =========================
 # EVALUAR MUNICIPIO
 # =========================
 def evaluar_municipio(path_csv):
-    municipio = path_csv.stem
+
+    municipio = path_csv.stem.lower()
+
     print(f"\n📍 {municipio}")
 
     df = pd.read_csv(path_csv)
 
-    if len(df) < 50:
+    df = df.dropna().reset_index(drop=True)
+
+    # 🔥 evaluar solo parte final
+    df = df.tail(120)
+
+    if len(df) < VENTANA + HORIZONTE:
         print("⚠️ Muy pocos datos")
         return
 
     # =========================
-    # FEATURES
+    # CARGAR MODELO
     # =========================
-    excluir = {"fecha", "nivel_m", "caudal_m3s", "desbordamiento"}
-    features = [c for c in df.columns if c not in excluir]
+    try:
+        (
+            modelo,
+            scaler_X,
+            scaler_nivel,
+            scaler_caudal,
+            features
+        ) = cargar_modelo_municipio(municipio)
 
-    X_data = df[features].values
-    nivel = df["nivel_m"].values
-    caudal = df["caudal_log"].values
-
-    # =========================
-    # LOAD MODELO
-    # =========================
-    modelo_path = MODEL_DIR / municipio / "modelo.keras"
-    scaler_X_path = MODEL_DIR / municipio / "scaler_X.pkl"
-    scaler_nivel_path = MODEL_DIR / municipio / "scaler_nivel.pkl"
-    scaler_caudal_path = MODEL_DIR / municipio / "scaler_caudal.pkl"
-
-    if not modelo_path.exists():
+    except Exception as e:
         print("⚠️ Modelo no encontrado")
+        print(e)
         return
 
-    modelo = load_model(modelo_path, compile=False)
+    reales_nivel = []
+    pred_nivel = []
 
-    scaler_X = pickle.load(open(scaler_X_path, "rb"))
-    scaler_nivel = pickle.load(open(scaler_nivel_path, "rb"))
-    scaler_caudal = pickle.load(open(scaler_caudal_path, "rb"))
+    reales_caudal = []
+    pred_caudal = []
 
-    # =========================
-    # ESCALADO
-    # =========================
-    X_scaled = scaler_X.transform(X_data)
-    nivel_scaled = scaler_nivel.transform(nivel.reshape(-1,1))
-    caudal_scaled = scaler_caudal.transform(caudal.reshape(-1,1))
+    y_true_alert = []
+    y_pred_alert = []
 
-    # =========================
-    # VENTANAS
-    # =========================
-    X, y_nivel, y_caudal = crear_ventanas(
-        X_scaled, nivel_scaled, caudal_scaled, VENTANA, HORIZONTE
+    umbral = UMBRALES.get(municipio, {}).get("alerta")
+
+    total_iters = min(
+        len(df) - VENTANA - HORIZONTE,
+        MAX_ITERS
     )
 
-    if len(X) < 10:
-        print("⚠️ Muy pocas ventanas")
-        return
+    print(f"🚀 iteraciones: {total_iters}")
 
     # =========================
-    # SPLIT
+    # LOOP TEMPORAL
     # =========================
-    split = int(len(X) * 0.85)
+    for i in range(total_iters):
 
-    X_test = X[split:]
-    y_nivel_test = y_nivel[split:]
-    y_caudal_test = y_caudal[split:]
+        #print(f"iteración {i+1}/{total_iters}")
 
-    # =========================
-    # PREDICCIÓN (CORRECTA)
-    # =========================
-    pred = modelo.predict(X_test, verbose=0)
+        ventana_df = df.iloc[i:i+VENTANA]
 
-    if not isinstance(pred, list) or len(pred) != 2:
-        print("❌ El modelo no devuelve 2 salidas")
-        return
+        futuro_df = df.iloc[
+            i+VENTANA:
+            i+VENTANA+HORIZONTE
+        ]
 
-    pred_nivel_scaled, pred_caudal_scaled = pred
+        pred_niveles, pred_caudales = predecir_rapido(
+            modelo,
+            scaler_X,
+            scaler_nivel,
+            scaler_caudal,
+            features,
+            ventana_df
+        )
 
-    # =========================
-    # DESESCALADO
-    # =========================
-    pred_nivel = scaler_nivel.inverse_transform(pred_nivel_scaled)
+        real_niveles = futuro_df["nivel_m"].values
+        real_caudales = futuro_df["caudal_m3s"].values
 
-    pred_caudal_log = scaler_caudal.inverse_transform(pred_caudal_scaled)
-    pred_caudal = np.expm1(pred_caudal_log)
+        reales_nivel.extend(real_niveles)
+        pred_nivel.extend(pred_niveles)
 
-    y_caudal_real = np.expm1(y_caudal_test)
+        reales_caudal.extend(real_caudales)
+        pred_caudal.extend(pred_caudales)
 
-    # =========================
-    # RESHAPE PARA MÉTRICAS
-    # =========================
-    y_nivel_test = y_nivel_test.reshape(y_nivel_test.shape[0], -1)
-    pred_nivel = pred_nivel.reshape(pred_nivel.shape[0], -1)
+        # =========================
+        # ALERTAS
+        # =========================
+        if umbral:
 
-    y_caudal_real = y_caudal_real.reshape(y_caudal_real.shape[0], -1)
-    pred_caudal = pred_caudal.reshape(pred_caudal.shape[0], -1)
+            real_alert = int(
+                np.max(real_niveles) > umbral
+            )
 
-    # =========================
-    # MÉTRICAS
-    # =========================
-    mae_n = mean_absolute_error(y_nivel_test, pred_nivel)
-    rmse_n = np.sqrt(mean_squared_error(y_nivel_test, pred_nivel))
+            pred_alert = int(
+                np.max(pred_niveles) > umbral
+            )
 
-    mae_c = mean_absolute_error(y_caudal_real, pred_caudal)
-    rmse_c = np.sqrt(mean_squared_error(y_caudal_real, pred_caudal))
-
-    print(f"NIVEL -> MAE: {mae_n:.4f} | RMSE: {rmse_n:.4f}")
-    print(f"CAUDAL -> MAE: {mae_c:.4f} | RMSE: {rmse_c:.4f}")
+            y_true_alert.append(real_alert)
+            y_pred_alert.append(pred_alert)
 
     # =========================
-    # GRÁFICAS
+    # MÉTRICAS NIVEL
     # =========================
-    out_dir = GRAFICAS_DIR / municipio
-    out_dir.mkdir(exist_ok=True)
+    mae_nivel = mean_absolute_error(
+        reales_nivel,
+        pred_nivel
+    )
 
-    # Día +1
-    y_real_nivel = y_nivel_test[:,0]
-    y_pred_nivel = pred_nivel[:,0]
+    rmse_nivel = np.sqrt(
+        mean_squared_error(
+            reales_nivel,
+            pred_nivel
+        )
+    )
 
-    y_real_caudal = y_caudal_real[:,0]
-    y_pred_caudal = pred_caudal[:,0]
+    # =========================
+    # MÉTRICAS CAUDAL
+    # =========================
+    mae_caudal = mean_absolute_error(
+        reales_caudal,
+        pred_caudal
+    )
 
-    # 🔹 NIVEL
-    plt.figure()
-    plt.plot(y_real_nivel, label="Real")
-    plt.plot(y_pred_nivel, label="Pred")
-    plt.legend()
-    plt.title("Nivel (Día +1)")
-    plt.savefig(out_dir / "nivel_linea.png")
-    plt.close()
+    rmse_caudal = np.sqrt(
+        mean_squared_error(
+            reales_caudal,
+            pred_caudal
+        )
+    )
 
-    # 🔹 CAUDAL
-    plt.figure()
-    plt.plot(y_real_caudal, label="Real")
-    plt.plot(y_pred_caudal, label="Pred")
-    plt.legend()
-    plt.title("Caudal (Día +1)")
-    plt.savefig(out_dir / "caudal_linea.png")
-    plt.close()
+    print("\n📊 RESULTADOS")
 
-    # 🔹 SCATTER NIVEL
-    plt.figure()
-    plt.scatter(y_real_nivel, y_pred_nivel, alpha=0.5)
-    plt.plot([y_real_nivel.min(), y_real_nivel.max()],
-             [y_real_nivel.min(), y_real_nivel.max()])
-    plt.title("Scatter Nivel")
-    plt.savefig(out_dir / "nivel_scatter.png")
-    plt.close()
+    print(
+        f"NIVEL  → "
+        f"MAE: {mae_nivel:.3f} | "
+        f"RMSE: {rmse_nivel:.3f}"
+    )
 
-    # 🔹 SCATTER CAUDAL
-    plt.figure()
-    plt.scatter(y_real_caudal, y_pred_caudal, alpha=0.5)
-    plt.plot([y_real_caudal.min(), y_real_caudal.max()],
-             [y_real_caudal.min(), y_real_caudal.max()])
-    plt.title("Scatter Caudal")
-    plt.savefig(out_dir / "caudal_scatter.png")
-    plt.close()
+    print(
+        f"CAUDAL → "
+        f"MAE: {mae_caudal:.3f} | "
+        f"RMSE: {rmse_caudal:.3f}"
+    )
 
-    # 🔹 PICOS
-    mask = y_real_nivel > UMBRAL
-    if np.sum(mask) > 0:
-        plt.figure()
-        plt.plot(y_real_nivel[mask], label="Real")
-        plt.plot(y_pred_nivel[mask], label="Pred")
-        plt.legend()
-        plt.title("Picos (Nivel)")
-        plt.savefig(out_dir / "picos.png")
-        plt.close()
+    # =========================
+    # MÉTRICAS ALERTA
+    # =========================
+    if len(y_true_alert) > 0:
+
+        precision = precision_score(
+            y_true_alert,
+            y_pred_alert,
+            zero_division=0
+        )
+
+        recall = recall_score(
+            y_true_alert,
+            y_pred_alert,
+            zero_division=0
+        )
+
+        f1 = f1_score(
+            y_true_alert,
+            y_pred_alert,
+            zero_division=0
+        )
+
+        print(
+            f"ALERTA → "
+            f"Precision: {precision:.3f} | "
+            f"Recall: {recall:.3f} | "
+            f"F1: {f1:.3f}"
+        )
+
+        if recall < 0.6:
+            print("⚠️ MAL: se escapan desbordamientos")
+
+        elif precision < 0.3:
+            print("⚠️ Muchas falsas alarmas")
+
+        else:
+            print("🔥 BUEN SISTEMA DE ALERTA")
+
 
 # =========================
 # MAIN
 # =========================
 def main():
+
     archivos = list(DATA_DIR.glob("*.csv"))
 
-    print("📊 Evaluando modelos...")
+    print("🚨 Evaluando modelo OPTIMIZADO...")
 
     for archivo in archivos:
-        print(f"\nEvaluando {archivo.stem}...")
         evaluar_municipio(archivo)
+
 
 if __name__ == "__main__":
     main()

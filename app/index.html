@@ -635,10 +635,11 @@
 
       return pred
         .map((p) => {
-          if (!Array.isArray(p) || p.length < 2) return null;
+          // 🔥 ahora es objeto, no array
+          if (!p || typeof p !== "object") return null;
 
-          const nivel = toNum(p[0]);
-          const caudal = toNum(p[1]);
+          const nivel = toNum(p.nivel);
+          const caudal = toNum(p.caudal);
 
           if (nivel === null && caudal === null) return null;
 
