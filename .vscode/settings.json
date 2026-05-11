@@ -1,5 +1,6 @@
 {
     "python.analysis.extraPaths": [
-        "./Miranda del Ebro/api"
+        "./Miranda del Ebro/api",
+        "./app/api"
     ]
 }
