@@ -23,7 +23,7 @@ RUN pip install --no-cache-dir --upgrade pip && \
     pip install --no-cache-dir -r requirements.txt
 
 # 🔥 Copiar archivo Firebase
-COPY firebase-key.json /app/firebase-key.json
+COPY app/firebase-key.json /app/firebase-key.json
 
 # Copiar resto del código
 COPY . .
