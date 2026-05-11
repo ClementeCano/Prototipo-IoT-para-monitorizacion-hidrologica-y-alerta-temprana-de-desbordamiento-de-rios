@@ -63,7 +63,7 @@ from app.core.config import SITES, collect_all_tags
 # from core.config import SITES, collect_all_tags
 
 from fastapi.staticfiles import StaticFiles
-import alertas
+from app import alertas
 
 from collections import defaultdict
 
