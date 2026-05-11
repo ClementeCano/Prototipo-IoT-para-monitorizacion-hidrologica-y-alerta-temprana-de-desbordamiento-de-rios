@@ -339,7 +339,14 @@ async def refresh_aemet_for_site(site_id: str, force: bool = True) -> bool:
         aemet_inflight.discard(site_id)
 
 def send_notification(title: str, body: str):
-    for token in tokens:
+
+    all_tokens = set()
+
+    for site_tokens in tokens.values():
+        all_tokens.update(site_tokens)
+
+    for token in all_tokens:
+
         message = messaging.Message(
             notification=messaging.Notification(
                 title=title,
@@ -351,6 +358,7 @@ def send_notification(title: str, body: str):
         try:
             messaging.send(message)
             print("✅ Notificación enviada")
+
         except Exception as e:
             print("❌ Error enviando:", e)
 
