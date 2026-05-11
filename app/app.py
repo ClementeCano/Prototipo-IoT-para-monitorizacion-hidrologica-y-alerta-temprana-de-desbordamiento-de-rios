@@ -2,6 +2,7 @@ import base64
 import json
 import os
 from dotenv import load_dotenv
+
 load_dotenv()
 import traceback
 
@@ -62,6 +63,10 @@ from prediccion_individual import predecir_semana_municipio
 from core.config import SITES, collect_all_tags
 
 from fastapi.staticfiles import StaticFiles
+import alertas
+
+from collections import defaultdict
+
 
 
 # ---------------------------
@@ -162,28 +167,47 @@ def api_sites():
         for s in SITES
     ])
 
-tokens = set()
+tokens = defaultdict(set)
 
 @app.post("/api/token")
 async def save_token(data: dict):
+
     token = data.get("token")
-    if token:
-        tokens.add(token)
-        print("🔥 Token guardado:", token[:20])
+    sites = data.get("sites", [])
+
+    if not token:
+        return {"ok": False}
+
+    # =========================
+    # ELIMINAR TOKEN ANTIGUO
+    # =========================
+    for site_tokens in tokens.values():
+        site_tokens.discard(token)
+
+    # =========================
+    # GUARDAR NUEVAS ALERTAS
+    # =========================
+    for site in sites:
+
+        tokens[site].add(token)
+
+        print(f"🔥 Token guardado en {site}")
+
     return {"ok": True}
 
-@app.get("/test-alert")
-def test_alert():
-    message = messaging.Message(
-        notification=messaging.Notification(
-            title="🚨 ALERTA RÍO EBRO",
-            body="Prueba de notificación funcionando correctamente"
-        ),
-        token="da6af1QKHhPBAm43Q_r1aN:APA91bEcq23OTJyQ9xZp18odwBPgoK6p4blseopPCLxdOyLXU28k_HIl2luDTU9zW6eeSM9Zm_HuOBcq9r60gogC8JDUVh3yWWSZQ29L_wKfIrauQD1Xe5k"
+
+@app.get("/test-alerts-now")
+def test_alerts_now():
+
+    alertas.ULTIMO_ENVIO = None
+
+    alertas.enviar_alertas_diarias(
+        tokens,
+        SITES
     )
 
-    response = messaging.send(message)
-    return {"status": "enviado", "response": response}
+    return {"status": "alertas enviadas"}
+
 
 @app.get("/firebase-messaging-sw.js")
 def sw():
@@ -519,8 +543,27 @@ async def poll_ia_loop():
 
         await asyncio.sleep(3600)
 
+async def poll_alertas_loop():
+
+    while True:
+
+        try:
+
+            alertas.enviar_alertas_diarias(
+                tokens,
+                SITES
+            )
+
+        except Exception as e:
+
+            print("[ALERTAS ERROR]", e)
+
+        # comprobar cada minuto
+        await asyncio.sleep(60)
+
 @app.on_event("startup")
 async def on_startup():
     asyncio.create_task(poll_saih_loop())
     asyncio.create_task(poll_aemet_loop())
     asyncio.create_task(poll_ia_loop())
+    asyncio.create_task(poll_alertas_loop())

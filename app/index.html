@@ -343,6 +343,16 @@
     </button>
   </div>
 
+  <div id="alertsPanel" style="display:none; margin-top:12px;">
+
+    <div id="alertsSites"></div>
+
+    <button onclick="saveAlerts()" class="alert-btn active">
+      💾 Guardar alertas
+    </button>
+
+  </div>
+
   <!-- GRID PRINCIPAL -->
   <div class="topgrid">
 
@@ -492,6 +502,17 @@
     // Initialize Firebase
     firebase.initializeApp(firebaseConfig);
     const messaging = firebase.messaging();
+    messaging.onMessage((payload) => {
+
+      console.log("📩 Foreground message:", payload);
+
+      new Notification(
+        payload.notification.title,
+        {
+          body: payload.notification.body
+        }
+      );
+    });
 
     const connDot = document.getElementById("connDot");
     const connText = document.getElementById("connText");
@@ -883,6 +904,31 @@
       }
 
       startWS();
+
+      const alertsDiv = document.getElementById("alertsSites");
+
+      alertsDiv.innerHTML = sites.map(s => `
+        <label style="display:block; margin-bottom:8px;">
+          <input type="checkbox" value="${s.id}">
+          ${s.name}
+        </label>
+      `).join("");
+
+      // =========================
+      // RESTAURAR MUNICIPIOS
+      // =========================
+      const savedSites = JSON.parse(
+        localStorage.getItem("alertSites") || "[]"
+      );
+
+      document
+        .querySelectorAll("#alertsSites input")
+        .forEach(input => {
+
+          if (savedSites.includes(input.value)) {
+            input.checked = true;
+          }
+        });
     }
 
     function startWS() {
@@ -1065,7 +1111,9 @@
     loadSites();
     
     async function initNotifications() {
+
       try {
+
         console.log("🔔 Iniciando notificaciones...");
 
         const permission = await Notification.requestPermission();
@@ -1076,75 +1124,189 @@
           return;
         }
 
-        // 🔥 REGISTRAR SERVICE WORKER (CLAVE)
+        // =========================
+        // SERVICE WORKER
+        // =========================
         if ('serviceWorker' in navigator) {
-          const registration = await navigator.serviceWorker.register('/firebase-messaging-sw.js');
+
+          const registration = await navigator.serviceWorker.register(
+            '/firebase-messaging-sw.js'
+          );
+
           console.log("✅ Service Worker registrado:", registration);
         }
 
-        // esperar a que el SW esté activo
+        // esperar SW activo
         const registration = await navigator.serviceWorker.ready;
 
+        // =========================
+        // TOKEN FIREBASE
+        // =========================
         const token = await messaging.getToken({
-          vapidKey: "BCFznYCtRHRklZcr-XJ2jjnjvzIFV0OBPqcZXdZWJdJI7YT8GClCn-uc8Qi1fFT_zyicRQNrRxG7qo6uKJwWGng",
+
+          vapidKey:
+            "BCFznYCtRHRklZcr-XJ2jjnjvzIFV0OBPqcZXdZWJdJI7YT8GClCn-uc8Qi1fFT_zyicRQNrRxG7qo6uKJwWGng",
+
           serviceWorkerRegistration: registration
         });
 
         if (!token) {
+
           console.log("❌ No se generó token");
-        } else {
-          console.log("🔥 TOKEN:", token);
+          return;
         }
 
+        console.log("🔥 TOKEN:", token);
+
+        // =========================
+        // MUNICIPIOS SELECCIONADOS
+        // =========================
+        const selectedSites = Array.from(
+          document.querySelectorAll("#alertsSites input:checked")
+        ).map(x => x.value);
+
+        console.log("📍 Municipios:", selectedSites);
+
+        // =========================
+        // ENVIAR AL BACKEND
+        // =========================
         await fetch("/api/token", {
+
           method: "POST",
+
           headers: {
             "Content-Type": "application/json"
           },
-          body: JSON.stringify({ token })
+
+          body: JSON.stringify({
+            token: token,
+            sites: selectedSites
+          })
         });
 
+        console.log("✅ Token enviado al backend");
+
       } catch (err) {
+
         console.error("❌ ERROR Firebase:", err);
       }
     }
 
     let alertsEnabled = false;
 
-    async function toggleAlerts() {
-      const btn = document.getElementById("alertBtn");
+    function toggleAlerts() {
 
+      const btn = document.getElementById("alertBtn");
+      const panel = document.getElementById("alertsPanel");
+
+      // =========================
+      // MOSTRAR PANEL
+      // =========================
       if (!alertsEnabled) {
-        // 🔔 ACTIVAR
-        await initNotifications();
 
         alertsEnabled = true;
+
         btn.classList.add("active");
-        btn.textContent = "✅ Alertas activadas";
+        btn.textContent = "✅ Configurar alertas";
+
+        panel.style.display = "block";
 
         localStorage.setItem("alerts", "on");
 
-      } else {
-        // 🔕 DESACTIVAR
+      }
+
+      // =========================
+      // OCULTAR PANEL
+      // =========================
+      else {
+
         alertsEnabled = false;
+
         btn.classList.remove("active");
         btn.textContent = "🔔 Activar alertas";
+
+        panel.style.display = "none";
 
         localStorage.setItem("alerts", "off");
       }
     }
 
     window.addEventListener("load", () => {
-    const saved = localStorage.getItem("alerts");
-    const btn = document.getElementById("alertBtn");
 
-    if (saved === "on") {
-      alertsEnabled = true;
+      const saved = localStorage.getItem("alerts");
+
+      const btn = document.getElementById("alertBtn");
+
+      if (saved === "on") {
+
+        alertsEnabled = true;
+
+        btn.classList.add("active");
+
+        btn.textContent = "✅ Alertas configuradas";
+
+        document.getElementById("alertsPanel").style.display = "none";
+      }
+    });
+
+  async function saveAlerts() {
+
+    try {
+
+      // =========================
+      // GUARDAR ALERTAS
+      // =========================
+      const selectedSitesBefore = Array.from(
+        document.querySelectorAll("#alertsSites input:checked")
+      );
+
+      if (selectedSitesBefore.length === 0) {
+
+        alert("Selecciona al menos un municipio");
+
+        return;
+      }
+      await initNotifications();
+
+      // =========================
+      // OCULTAR PANEL
+      // =========================
+      document.getElementById("alertsPanel").style.display = "none";
+
+      // =========================
+      // GUARDAR MUNICIPIOS
+      // =========================
+      const selectedSites = Array.from(
+        document.querySelectorAll("#alertsSites input:checked")
+      ).map(x => x.value);
+
+      localStorage.setItem(
+        "alertSites",
+        JSON.stringify(selectedSites)
+      );
+
+      // =========================
+      // ACTUALIZAR BOTÓN
+      // =========================
+      const btn = document.getElementById("alertBtn");
+
       btn.classList.add("active");
-      btn.textContent = "✅ Alertas activadas";
-      
+      btn.textContent = "✅ Alertas configuradas";
+
+      // =========================
+      // GUARDAR ESTADO
+      // =========================
+      localStorage.setItem("alerts", "on");
+
+      alert("✅ Alertas guardadas correctamente");
+
+    } catch (err) {
+
+      console.error(err);
+
+      alert("❌ Error guardando alertas");
     }
-  });
+  }
 
   </script>
 
