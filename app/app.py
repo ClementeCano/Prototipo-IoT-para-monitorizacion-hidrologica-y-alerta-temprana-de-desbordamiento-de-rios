@@ -10,24 +10,19 @@ import firebase_admin
 from firebase_admin import credentials, messaging
 
 
+try:
+    firebase_json = os.getenv("FIREBASE_CREDENTIALS")
 
-if not firebase_admin._apps:
-    firebase_key = os.getenv("FIREBASE_CREDENTIALS")
+    cred_dict = json.loads(firebase_json)
 
-    if firebase_key:
-        try:
+    cred = credentials.Certificate(cred_dict)
 
-            cred_dict = json.loads(firebase_key)
-            cred = credentials.Certificate(cred_dict)
-            #cred = credentials.Certificate(firebase_key)
-            firebase_admin.initialize_app(cred)
-            print("✅ Firebase inicializado")
-        except Exception as e:
-            print("❌ Error Firebase:", e)
-            
-         
-    else:
-        print("⚠️ No FIREBASE_CREDENTIALS en entorno")
+    firebase_admin.initialize_app(cred)
+
+    print("✅ Firebase inicializado")
+
+except Exception as e:
+    print("❌ Error Firebase:", e)
 
 
 

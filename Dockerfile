@@ -1,27 +1,32 @@
 # Imagen base
 FROM python:3.11-slim
 
-# Variables de entorno (muy importantes)
+# Variables de entorno
 ENV PYTHONDONTWRITEBYTECODE=1
 ENV PYTHONUNBUFFERED=1
 
 # Carpeta de trabajo
 WORKDIR /app
 
-# 🔥 Certificados + utilidades básicas
-RUN apt-get update && apt-get install -y --no-install-recommends ca-certificates curl && update-ca-certificates && rm -rf /var/lib/apt/lists/*
+# Certificados y utilidades
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    ca-certificates \
+    curl \
+    && update-ca-certificates \
+    && rm -rf /var/lib/apt/lists/*
 
-# Copiar requirements primero (mejor cache)
+# Copiar requirements
 COPY requirements.txt .
 
-# 🔥 Actualizar pip + instalar deps
-RUN pip install --no-cache-dir --upgrade pip && pip install --no-cache-dir -r requirements.txt
+# Instalar dependencias
+RUN pip install --no-cache-dir --upgrade pip && \
+    pip install --no-cache-dir -r requirements.txt
 
-# Copiar el resto del código
+# 🔥 Copiar archivo Firebase
+COPY firebase-key.json /app/firebase-key.json
+
+# Copiar resto del código
 COPY . .
 
-# 🔍 (Opcional) debug para ver archivos en logs
-# RUN ls -R /app
-
-# Comando por defecto (modo no bufferizado)
+# Comando inicio
 CMD ["uvicorn", "app.app:app", "--host", "0.0.0.0", "--port", "8080"]
