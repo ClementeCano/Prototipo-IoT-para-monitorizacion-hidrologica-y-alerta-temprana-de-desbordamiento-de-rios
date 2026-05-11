@@ -1,30 +1,26 @@
-def cargar_umbrales(path="umbrales.txt"):
+from pathlib import Path
+
+BASE_DIR = Path(__file__).resolve().parent
+
+def cargar_umbrales(path=None):
     umbrales = {}
+
+    if path is None:
+        path = BASE_DIR / "umbrales.txt"
+
+    path = Path(path)
+
+    print("📁 Ruta umbrales:", path)
+    print("✅ Existe:", path.exists())
 
     with open(path, "r", encoding="utf-8") as f:
         for linea in f:
-            if "->" not in linea:
+            linea = linea.strip()
+
+            if not linea or linea.startswith("#"):
                 continue
 
-            nombre, valores = linea.split("->")
-
-            nombre = nombre.strip().lower()
-            nombre = nombre.replace(" ", "_").replace("-", "_")
-
-            partes = [v.strip() for v in valores.split(",")]
-
-            # limpiar "-"
-            nums = []
-            for p in partes:
-                try:
-                    nums.append(float(p))
-                except:
-                    nums.append(None)
-
-            umbrales[nombre] = {
-                "prealerta": nums[0],
-                "alerta": nums[1],
-                "alarma": nums[2]
-            }
+            municipio, valor = linea.split("=")
+            umbrales[municipio.strip().lower()] = float(valor.strip())
 
     return umbrales
