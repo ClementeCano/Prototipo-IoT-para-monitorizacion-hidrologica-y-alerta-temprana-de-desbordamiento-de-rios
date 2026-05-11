@@ -3,8 +3,8 @@ import os
 
 from firebase_admin import messaging
 
-from prediccion_individual import predecir_semana_municipio
-from umbrales import cargar_umbrales
+from app.prediccion_individual import predecir_semana_municipio
+from app.umbrales import cargar_umbrales
 
 # =========================
 # CONFIG
