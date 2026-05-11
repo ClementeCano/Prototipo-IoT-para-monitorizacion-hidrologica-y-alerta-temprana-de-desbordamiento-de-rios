@@ -11,11 +11,11 @@ from firebase_admin import credentials, messaging
 
 
 try:
-    firebase_json = os.getenv("FIREBASE_CREDENTIALS")
+    firebase_path = os.getenv("FIREBASE_CREDENTIALS")
 
-    cred_dict = json.loads(firebase_json)
+    print("🔥 Firebase path:", firebase_path)
 
-    cred = credentials.Certificate(cred_dict)
+    cred = credentials.Certificate(firebase_path)
 
     firebase_admin.initialize_app(cred)
 
