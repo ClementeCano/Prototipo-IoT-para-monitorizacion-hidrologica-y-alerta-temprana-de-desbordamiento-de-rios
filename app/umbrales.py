@@ -17,10 +17,23 @@ def cargar_umbrales(path=None):
         for linea in f:
             linea = linea.strip()
 
-            if not linea or linea.startswith("#"):
+            if not linea:
                 continue
 
-            municipio, valor = linea.split("=")
-            umbrales[municipio.strip().lower()] = float(valor.strip())
+            if "->" not in linea:
+                print(f"⚠️ Línea inválida: {linea}")
+                continue
+
+            municipio, valores = linea.split("->", 1)
+
+            municipio = municipio.strip().lower()
+
+            niveles = [v.strip() for v in valores.split(",")]
+
+            umbrales[municipio] = {
+                "amarillo": float(niveles[0]) if niveles[0] != "-" else None,
+                "naranja": float(niveles[1]) if niveles[1] != "-" else None,
+                "rojo": float(niveles[2]) if niveles[2] != "-" else None,
+            }
 
     return umbrales
