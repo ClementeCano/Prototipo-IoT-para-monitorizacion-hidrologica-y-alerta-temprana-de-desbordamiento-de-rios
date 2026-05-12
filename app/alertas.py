@@ -1,6 +1,4 @@
 from datetime import datetime
-import os
-
 from firebase_admin import messaging
 
 from app.prediccion_individual import predecir_semana_municipio
@@ -20,41 +18,74 @@ ULTIMO_ENVIO = None
 # =========================
 def calcular_nivel_alerta(municipio, predicciones):
 
+    municipio = municipio.strip().lower()
+
     if not predicciones:
         return "nulo", "Sin datos suficientes"
 
-    umbral = UMBRALES.get(municipio, {}).get("alerta")
+    # =========================
+    # OBTENER UMBRALES
+    # =========================
+    umbrales = UMBRALES.get(municipio)
 
-    if not umbral:
-        return "nulo", "Sin umbral definido"
+    if not umbrales:
+        return "nulo", f"Sin umbral definido para {municipio}"
 
-    # 🔥 coger máximo nivel previsto HOY
+    amarillo = umbrales.get("amarillo")
+    naranja = umbrales.get("naranja")
+    rojo = umbrales.get("rojo")
+
+    # =========================
+    # MÁXIMO NIVEL PREVISTO HOY
+    # =========================
     max_nivel = max([
         p.get("nivel", 0)
         for p in predicciones[:1]
     ])
 
+    nombre = municipio.replace("_", " ").title()
+
     # =========================
-    # CLASIFICACIÓN
+    # ALERTA ROJA
     # =========================
-    if max_nivel >= umbral:
+    if rojo is not None and max_nivel >= rojo:
+
         return (
             "rojo",
-            f"🔴 ALERTA ROJA en {municipio.capitalize()}. "
+            f"🔴 ALERTA ROJA en {nombre}. "
             f"Nivel previsto: {max_nivel:.2f} m"
         )
 
-    elif max_nivel >= umbral * 0.8:
+    # =========================
+    # ALERTA NARANJA
+    # =========================
+    elif naranja is not None and max_nivel >= naranja:
+
         return (
             "naranja",
-            f"🟠 Vigilancia en {municipio.capitalize()}. "
-            f"Nivel previsto elevado: {max_nivel:.2f} m"
+            f"🟠 Riesgo importante en {nombre}. "
+            f"Nivel previsto: {max_nivel:.2f} m"
         )
 
+    # =========================
+    # ALERTA AMARILLA
+    # =========================
+    elif amarillo is not None and max_nivel >= amarillo:
+
+        return (
+            "amarillo",
+            f"🟡 Vigilancia activa en {nombre}. "
+            f"Nivel previsto: {max_nivel:.2f} m"
+        )
+
+    # =========================
+    # NORMAL
+    # =========================
     else:
+
         return (
             "verde",
-            f"🟢 Situación estable en {municipio.capitalize()}. "
+            f"🟢 Situación estable en {nombre}. "
             f"Nivel previsto: {max_nivel:.2f} m"
         )
 
@@ -107,7 +138,6 @@ def enviar_alertas_diarias(tokens, sites):
     # =========================
     # SOLO A LAS 08:00
     # =========================
-    # DESCOMENTA PARA PRODUCCIÓN
     # if ahora.hour != 8:
     #     return
 
@@ -128,7 +158,6 @@ def enviar_alertas_diarias(tokens, sites):
             # =========================
             tokens_municipio = tokens.get(site_id, set())
 
-            # nadie suscrito
             if not tokens_municipio:
                 continue
 
@@ -146,7 +175,7 @@ def enviar_alertas_diarias(tokens, sites):
             )
 
             # =========================
-            # TÍTULO
+            # TÍTULO PUSH
             # =========================
             if nivel_alerta == "rojo":
 
@@ -154,7 +183,11 @@ def enviar_alertas_diarias(tokens, sites):
 
             elif nivel_alerta == "naranja":
 
-                titulo = "🟠 Riesgo moderado de crecida"
+                titulo = "🟠 Riesgo importante de crecida"
+
+            elif nivel_alerta == "amarillo":
+
+                titulo = "🟡 Vigilancia por crecida"
 
             else:
 
