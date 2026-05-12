@@ -563,6 +563,9 @@
     let ws = null;
     let currentSite = null;
 
+    let firebaseToken = null;
+    let notificationsInitialized = null;
+
     function setConn(isUp) {
       connDot.className = "dot " + (isUp ? "ok" : "");
       connText.textContent = isUp ? "Conectado" : "Desconectado";
@@ -929,6 +932,22 @@
             input.checked = true;
           }
         });
+      
+      // =========================
+      // AUTO GUARDAR CAMBIOS
+      // =========================
+      document
+        .querySelectorAll("#alertsSites input")
+        .forEach(input => {
+
+          input.addEventListener("change", async () => {
+
+            console.log("🔄 Cambio en alertas");
+
+            await enviarSuscripciones();
+          });
+        });
+
     }
 
     function startWS() {
@@ -1114,35 +1133,49 @@
 
       try {
 
+        // =========================
+        // EVITAR INICIALIZAR 20 VECES
+        // =========================
+        if (notificationsInitialized && firebaseToken) {
+          return firebaseToken;
+        }
+
         console.log("🔔 Iniciando notificaciones...");
 
+        // =========================
+        // PERMISOS
+        // =========================
         const permission = await Notification.requestPermission();
+
         console.log("Permiso:", permission);
 
         if (permission !== "granted") {
+
           console.log("❌ Permiso denegado");
-          return;
+          return null;
         }
 
         // =========================
         // SERVICE WORKER
         // =========================
-        if ('serviceWorker' in navigator) {
+        if ("serviceWorker" in navigator) {
 
           const registration = await navigator.serviceWorker.register(
-            '/firebase-messaging-sw.js'
+            "/firebase-messaging-sw.js"
           );
 
           console.log("✅ Service Worker registrado:", registration);
         }
 
-        // esperar SW activo
+        // =========================
+        // ESPERAR SW
+        // =========================
         const registration = await navigator.serviceWorker.ready;
 
         // =========================
         // TOKEN FIREBASE
         // =========================
-        const token = await messaging.getToken({
+        firebaseToken = await getToken(messaging, {
 
           vapidKey:
             "BCFznYCtRHRklZcr-XJ2jjnjvzIFV0OBPqcZXdZWJdJI7YT8GClCn-uc8Qi1fFT_zyicRQNrRxG7qo6uKJwWGng",
@@ -1150,16 +1183,44 @@
           serviceWorkerRegistration: registration
         });
 
-        if (!token) {
+        if (!firebaseToken) {
 
           console.log("❌ No se generó token");
-          return;
+          return null;
         }
 
-        console.log("🔥 TOKEN:", token);
+        console.log("🔥 TOKEN:", firebaseToken);
+
+        notificationsInitialized = true;
+
+        return firebaseToken;
+
+      } catch (err) {
+
+        console.error("❌ ERROR Firebase:", err);
+
+        return null;
+      }
+    }
+
+    async function enviarSuscripciones() {
+
+      try {
 
         // =========================
-        // MUNICIPIOS SELECCIONADOS
+        // ASEGURAR TOKEN
+        // =========================
+        if (!firebaseToken) {
+
+          const token = await initNotifications();
+
+          if (!token) {
+            return;
+          }
+        }
+
+        // =========================
+        // MUNICIPIOS
         // =========================
         const selectedSites = Array.from(
           document.querySelectorAll("#alertsSites input:checked")
@@ -1168,9 +1229,17 @@
         console.log("📍 Municipios:", selectedSites);
 
         // =========================
-        // ENVIAR AL BACKEND
+        // GUARDAR LOCAL
         // =========================
-        await fetch("/api/token", {
+        localStorage.setItem(
+          "alertSites",
+          JSON.stringify(selectedSites)
+        );
+
+        // =========================
+        // ENVIAR BACKEND
+        // =========================
+        const res = await fetch("/api/token", {
 
           method: "POST",
 
@@ -1179,16 +1248,18 @@
           },
 
           body: JSON.stringify({
-            token: token,
+            token: firebaseToken,
             sites: selectedSites
           })
         });
 
-        console.log("✅ Token enviado al backend");
+        const data = await res.json();
+
+        console.log("✅ Suscripciones guardadas:", data);
 
       } catch (err) {
 
-        console.error("❌ ERROR Firebase:", err);
+        console.error("❌ Error enviando suscripciones:", err);
       }
     }
 
@@ -1247,6 +1318,19 @@
 
         document.getElementById("alertsPanel").style.display = "none";
       }
+
+      // =========================
+      // RESTAURAR SUSCRIPCIONES
+      // =========================
+      const savedSites = JSON.parse(
+        localStorage.getItem("alertSites") || "[]"
+      );
+
+      if (savedSites.length > 0) {
+
+        initNotifications()
+          .then(() => enviarSuscripciones());
+      }
     });
 
   async function saveAlerts() {
@@ -1266,7 +1350,7 @@
 
         return;
       }
-      await initNotifications();
+      await enviarSuscripciones();
 
       // =========================
       // OCULTAR PANEL
