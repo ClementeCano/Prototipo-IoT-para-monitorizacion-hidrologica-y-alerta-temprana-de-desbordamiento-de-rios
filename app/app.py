@@ -531,20 +531,20 @@ async def poll_aemet_loop():
 
         await asyncio.sleep(AEMET_CHECK_SECONDS)
 
-async def poll_ia_loop():
-    """
-    Refresca la predicción IA para los sitios activos.
-    No hace falta muy rápido: cada 5 min está bien.
-    """
-    while True:
-        try:
-            active_sites = set(ws_site.values())
-            for sid in active_sites:
-                await refresh_ia_for_site(sid)
-        except Exception as e:
-            print("[IA LOOP ERROR]", repr(e))
+# async def poll_ia_loop():
+#     """
+#     Refresca la predicción IA para los sitios activos.
+#     No hace falta muy rápido: cada 5 min está bien.
+#     """
+#     while True:
+#         try:
+#             active_sites = set(ws_site.values())
+#             for sid in active_sites:
+#                 await refresh_ia_for_site(sid)
+#         except Exception as e:
+#             print("[IA LOOP ERROR]", repr(e))
 
-        await asyncio.sleep(3600)
+#         await asyncio.sleep(3600)
 
 async def poll_alertas_loop():
 
@@ -568,5 +568,5 @@ async def poll_alertas_loop():
 async def on_startup():
     asyncio.create_task(poll_saih_loop())
     asyncio.create_task(poll_aemet_loop())
-    asyncio.create_task(poll_ia_loop())
+    #asyncio.create_task(poll_ia_loop())
     asyncio.create_task(poll_alertas_loop())
