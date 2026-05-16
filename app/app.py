@@ -66,7 +66,9 @@ from pathlib import Path
 # =========================
 # TOKENS PERSISTENTES
 # =========================
-TOKENS_FILE = Path("tokens.json")
+BASE_DIR = Path(__file__).resolve().parent
+
+TOKENS_FILE = BASE_DIR / "tokens.json"
 
 
 def cargar_tokens():
