@@ -66,26 +66,43 @@ from pathlib import Path
 # =========================
 # TOKENS PERSISTENTES
 # =========================
+from pathlib import Path
+from collections import defaultdict
+import json
+
+# 🔥 usar ruta absoluta estable
 BASE_DIR = Path(__file__).resolve().parent
 
 TOKENS_FILE = BASE_DIR / "tokens.json"
 
+print("📁 TOKENS_FILE:", TOKENS_FILE)
+
 
 def cargar_tokens():
 
-    if not TOKENS_FILE.exists():
-
-        print("⚠️ tokens.json no existe")
-
-        return defaultdict(set)
-
     try:
 
+        # =========================
+        # CREAR ARCHIVO SI NO EXISTE
+        # =========================
+        if not TOKENS_FILE.exists():
+
+            print("⚠️ tokens.json no existe, creando...")
+
+            with open(TOKENS_FILE, "w", encoding="utf-8") as f:
+
+                json.dump({}, f)
+
+            return defaultdict(set)
+
+        # =========================
+        # LEER ARCHIVO
+        # =========================
         with open(TOKENS_FILE, "r", encoding="utf-8") as f:
 
             data = json.load(f)
 
-        print("✅ Tokens cargados")
+        print(f"✅ Tokens cargados: {len(data)} municipios")
 
         return defaultdict(
             set,
@@ -97,7 +114,7 @@ def cargar_tokens():
 
     except Exception as e:
 
-        print("❌ Error cargando tokens:", e)
+        print("❌ Error cargando tokens:", repr(e))
 
         return defaultdict(set)
 
@@ -106,11 +123,17 @@ def guardar_tokens():
 
     try:
 
+        # =========================
+        # CONVERTIR SET → LIST
+        # =========================
         serializable = {
             k: list(v)
             for k, v in tokens.items()
         }
 
+        # =========================
+        # GUARDAR JSON
+        # =========================
         with open(TOKENS_FILE, "w", encoding="utf-8") as f:
 
             json.dump(
@@ -120,13 +143,18 @@ def guardar_tokens():
                 ensure_ascii=False
             )
 
-        print("💾 Tokens guardados")
+        total = sum(len(v) for v in serializable.values())
+
+        print(f"💾 Tokens guardados ({total} tokens)")
 
     except Exception as e:
 
-        print("❌ Error guardando tokens:", e)
+        print("❌ Error guardando tokens:", repr(e))
 
 
+# =========================
+# CARGAR TOKENS AL INICIO
+# =========================
 tokens = cargar_tokens()
 
 
@@ -234,60 +262,32 @@ def api_sites():
 @app.post("/api/token")
 async def save_token(data: dict):
 
-    try:
+    print("📩 Token recibido")
 
-        token = data.get("token")
-        sites = data.get("sites", [])
+    token = data.get("token")
+    sites = data.get("sites", [])
 
-        print("===================================")
-        print("📩 NUEVO TOKEN RECIBIDO")
-        print("📍 Sites:", sites)
-        print("🔥 Token:", token[:30] if token else "NONE")
-        print("===================================")
+    if not token:
 
-        if not token:
+        print("❌ Token vacío")
 
-            return {
-                "ok": False,
-                "error": "Token vacío"
-            }
+        return {"ok": False}
 
-        # =========================
-        # ELIMINAR TOKEN ANTIGUO
-        # =========================
-        for site_tokens in tokens.values():
+    # eliminar token previo
+    for site_tokens in tokens.values():
+        site_tokens.discard(token)
 
-            site_tokens.discard(token)
+    # guardar nuevo
+    for site in sites:
 
-        # =========================
-        # GUARDAR NUEVOS
-        # =========================
-        for site in sites:
+        tokens[site].add(token)
 
-            tokens[site].add(token)
+        print(f"🔥 Token guardado en {site}")
 
-            print(f"✅ Token guardado en {site}")
+    # 🔥 GUARDAR EN DISCO
+    guardar_tokens()
 
-        guardar_tokens()
-
-        print("📦 TOKENS TOTALES:")
-
-        for k, v in tokens.items():
-
-            print(f"   {k}: {len(v)}")
-
-        return {"ok": True}
-
-    except Exception as e:
-
-        print("❌ ERROR /api/token:", e)
-
-        traceback.print_exc()
-
-        return {
-            "ok": False,
-            "error": str(e)
-        }
+    return {"ok": True}
 
 
 @app.get("/test-alerts-now")
