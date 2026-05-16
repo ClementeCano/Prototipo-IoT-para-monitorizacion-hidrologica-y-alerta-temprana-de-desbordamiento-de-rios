@@ -603,6 +603,7 @@
 
     let firebaseToken = null;
     let notificationsInitialized = null;
+    let lastFirebaseError = null;
 
     function setConn(isUp) {
       connDot.className = "dot " + (isUp ? "ok" : "");
@@ -1247,16 +1248,66 @@
 
       } catch (err) {
 
-        console.error("❌ ERROR Firebase:", err);
+        lastFirebaseError = {
+          code: err?.code || null,
+          message: err?.message || String(err),
+          stack: err?.stack || null
+        };
+
+        console.error("❌ ERROR Firebase:", lastFirebaseError);
 
         alert(
           "Error Firebase:\n" +
-          (err?.message || JSON.stringify(err))
+          [
+            lastFirebaseError.code,
+            lastFirebaseError.message
+          ].filter(Boolean).join("\n")
         );
 
         return null;
       }
     }
+
+    window.debugPush = async function debugPush() {
+      const result = {
+        href: location.href,
+        origin: location.origin,
+        protocol: location.protocol,
+        secureContext: window.isSecureContext,
+        notification: "Notification" in window ? Notification.permission : "unsupported",
+        serviceWorker: "serviceWorker" in navigator,
+        pushManager: "PushManager" in window,
+        firebaseMessagingSupported: null,
+        serviceWorkerReady: false,
+        tokenPrefix: null,
+        lastFirebaseError
+      };
+
+      try {
+        if (firebase.messaging.isSupported) {
+          result.firebaseMessagingSupported = await firebase.messaging.isSupported();
+        }
+
+        const registration = await navigator.serviceWorker.getRegistration("/");
+        result.serviceWorkerRegistered = Boolean(registration);
+        result.serviceWorkerScope = registration?.scope || null;
+
+        const ready = await navigator.serviceWorker.ready;
+        result.serviceWorkerReady = Boolean(ready);
+
+        const token = await initNotifications({ allowPrompt: true });
+        result.tokenPrefix = token ? token.slice(0, 18) : null;
+      } catch (err) {
+        result.lastFirebaseError = {
+          code: err?.code || null,
+          message: err?.message || String(err),
+          stack: err?.stack || null
+        };
+      }
+
+      console.table(result);
+      return result;
+    };
 
     async function enviarSuscripciones({ allowPrompt = true, requireSites = false } = {}) {
 
