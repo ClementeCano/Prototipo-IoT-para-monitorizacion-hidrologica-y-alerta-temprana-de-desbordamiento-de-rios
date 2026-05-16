@@ -1,8 +1,15 @@
 # flyctl launch added from .gitignore
 **\.env
+**/.env
+**/.env.*
+**/firebase-key.json
+**/tokens.json
 **\__pycache__
+**/__pycache__
 **\*.pyc
+**/*.pyc
 **\*.pyo
+**/*.pyo
 **\.gitignore
 .git
 .vscode

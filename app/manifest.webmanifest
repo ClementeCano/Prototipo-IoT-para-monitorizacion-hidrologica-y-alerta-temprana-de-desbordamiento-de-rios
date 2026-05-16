@@ -1,0 +1,10 @@
+{
+  "name": "Dashboard Rio Ebro",
+  "short_name": "Rio Ebro",
+  "start_url": "/",
+  "scope": "/",
+  "display": "standalone",
+  "background_color": "#05070d",
+  "theme_color": "#05070d",
+  "description": "Monitorizacion hidrologica y alertas tempranas del Rio Ebro"
+}

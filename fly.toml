@@ -8,6 +8,13 @@ primary_region = 'cdg'
 
 [build]
 
+[env]
+  TOKENS_FILE = "/data/tokens.json"
+
+[[mounts]]
+  source = "tokens_data"
+  destination = "/data"
+
 [http_service]
   internal_port = 8080
   force_https = true

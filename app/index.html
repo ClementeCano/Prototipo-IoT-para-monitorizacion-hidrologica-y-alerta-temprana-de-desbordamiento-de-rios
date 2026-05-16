@@ -4,6 +4,8 @@
   <meta charset="utf-8"/>
   <meta name="viewport" content="width=device-width, initial-scale=1"/>
   <title>TFG Río Ebro – Tiempo real</title>
+  <link rel="manifest" href="/manifest.webmanifest"/>
+  <meta name="theme-color" content="#05070d"/>
   <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
 
   <link rel="stylesheet" href="https://unpkg.com/leaflet/dist/leaflet.css" />
@@ -499,20 +501,56 @@
       measurementId: "G-N9PV3N2M2J"
     };
 
-    // Initialize Firebase
+    const FCM_VAPID_KEY =
+      "BCFznYCtRHRklZcr-XJ2jjnjvzIFV0OBPqcZXdZWJdJI7YT8GClCn-uc8Qi1fFT_zyicRQNrRxG7qo6uKJwWGng";
+
     firebase.initializeApp(firebaseConfig);
-    const messaging = firebase.messaging();
-    messaging.onMessage((payload) => {
 
-      console.log("📩 Foreground message:", payload);
+    let messaging = null;
+    let foregroundHandlerRegistered = false;
+    let serviceWorkerRegistrationPromise = null;
 
-      new Notification(
-        payload.notification.title,
-        {
-          body: payload.notification.body
+    async function getMessagingInstance() {
+      if (messaging) return messaging;
+
+      if (!window.isSecureContext) {
+        throw new Error("FCM Web Push necesita HTTPS o localhost.");
+      }
+
+      if (!("Notification" in window)) {
+        throw new Error("Este navegador no soporta notificaciones web.");
+      }
+
+      if (!("serviceWorker" in navigator)) {
+        throw new Error("Este navegador no soporta service workers.");
+      }
+
+      if (firebase.messaging.isSupported) {
+        const supported = await firebase.messaging.isSupported();
+        if (!supported) {
+          throw new Error("Firebase Messaging no esta soportado en este navegador.");
         }
-      );
-    });
+      }
+
+      messaging = firebase.messaging();
+
+      if (!foregroundHandlerRegistered) {
+        messaging.onMessage((payload) => {
+          console.log("📩 Foreground message:", payload);
+
+          const title = payload.notification?.title || payload.data?.title || "Alerta Rio";
+          const body = payload.notification?.body || payload.data?.body || "";
+
+          if (Notification.permission === "granted") {
+            new Notification(title, { body });
+          }
+        });
+
+        foregroundHandlerRegistered = true;
+      }
+
+      return messaging;
+    }
 
     const connDot = document.getElementById("connDot");
     const connText = document.getElementById("connText");
@@ -944,7 +982,7 @@
 
             console.log("🔄 Cambio en alertas");
 
-            await enviarSuscripciones();
+            await enviarSuscripciones({ allowPrompt: true });
           });
         });
 
@@ -1127,9 +1165,9 @@
     }
 
 
-    loadSites();
+    const sitesReady = loadSites();
     
-    async function initNotifications() {
+    async function initNotifications({ allowPrompt = true } = {}) {
 
       try {
 
@@ -1142,10 +1180,21 @@
 
         console.log("🔔 Iniciando notificaciones...");
 
+        const messagingInstance = await getMessagingInstance();
+
         // =========================
         // PERMISOS
         // =========================
-        const permission = await Notification.requestPermission();
+        let permission = Notification.permission;
+
+        if (permission === "default") {
+          if (!allowPrompt) {
+            console.log("⏸️ Permiso pendiente; no se solicita fuera de una accion del usuario.");
+            return null;
+          }
+
+          permission = await Notification.requestPermission();
+        }
 
         console.log("Permiso:", permission);
 
@@ -1158,14 +1207,18 @@
         // =========================
         // SERVICE WORKER
         // =========================
-        if ("serviceWorker" in navigator) {
+        if (!serviceWorkerRegistrationPromise) {
 
-          const registration = await navigator.serviceWorker.register(
-            "/firebase-messaging-sw.js"
+          serviceWorkerRegistrationPromise = navigator.serviceWorker.register(
+            "/firebase-messaging-sw.js",
+            { scope: "/" }
           );
-
-          console.log("✅ Service Worker registrado:", registration);
         }
+
+        const registered = await serviceWorkerRegistrationPromise;
+        await registered.update();
+
+        console.log("✅ Service Worker registrado:", registered);
 
         // =========================
         // ESPERAR SW
@@ -1175,11 +1228,8 @@
         // =========================
         // TOKEN FIREBASE
         // =========================
-        firebaseToken = await messaging.getToken({
-
-          vapidKey:
-            "BCFznYCtRHRklZcr-XJ2jjnjvzIFV0OBPqcZXdZWJdJI7YT8GClCn-uc8Qi1fFT_zyicRQNrRxG7qo6uKJwWGng",
-
+        firebaseToken = await messagingInstance.getToken({
+          vapidKey: FCM_VAPID_KEY,
           serviceWorkerRegistration: registration
         });
 
@@ -1208,16 +1258,18 @@
       }
     }
 
-    async function enviarSuscripciones() {
+    async function enviarSuscripciones({ allowPrompt = true, requireSites = false } = {}) {
 
       try {
 
         // =========================
         // ASEGURAR TOKEN
         // =========================
+        await sitesReady;
+
         if (!firebaseToken) {
 
-          const token = await initNotifications();
+          const token = await initNotifications({ allowPrompt });
 
           if (!token) {
             return;
@@ -1233,6 +1285,11 @@
 
         console.log("📍 Municipios:", selectedSites);
 
+        if (requireSites && selectedSites.length === 0) {
+          console.log("⏸️ No se envia token: no hay municipios seleccionados.");
+          return;
+        }
+
         // =========================
         // GUARDAR LOCAL
         // =========================
@@ -1244,6 +1301,8 @@
         // =========================
         // ENVIAR BACKEND
         // =========================
+        console.log("🚀 Enviando token al backend...");
+
         const res = await fetch("/api/token", {
           
 
@@ -1258,11 +1317,14 @@
             sites: selectedSites
           })
         });
-        console.log("🚀 Enviando token al backend...");
 
         const data = await res.json();
         console.log("📡 STATUS:", res.status);
         console.log("📦 RESPUESTA:", data);
+
+        if (!res.ok || !data.ok) {
+          throw new Error(data.error || `HTTP ${res.status}`);
+        }
 
         console.log("✅ Suscripciones guardadas:", data);
 
@@ -1337,8 +1399,13 @@
 
       if (savedSites.length > 0) {
 
-        initNotifications()
-          .then(() => enviarSuscripciones());
+        sitesReady
+          .then(() => initNotifications({ allowPrompt: false }))
+          .then((token) => {
+            if (token) {
+              return enviarSuscripciones({ allowPrompt: false, requireSites: true });
+            }
+          });
       }
     });
 
@@ -1359,7 +1426,7 @@
 
         return;
       }
-      await enviarSuscripciones();
+      await enviarSuscripciones({ allowPrompt: true, requireSites: true });
 
       // =========================
       // OCULTAR PANEL

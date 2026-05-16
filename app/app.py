@@ -12,10 +12,26 @@ from firebase_admin import credentials, messaging
 
 try:
     firebase_path = os.getenv("FIREBASE_CREDENTIALS")
+    firebase_json = os.getenv("FIREBASE_CREDENTIALS_JSON")
+    firebase_json_base64 = os.getenv("FIREBASE_CREDENTIALS_JSON_BASE64")
 
     print("🔥 Firebase path:", firebase_path)
 
-    cred = credentials.Certificate(firebase_path)
+    firebase_cred_source = None
+
+    if firebase_json_base64:
+        firebase_cred_source = json.loads(base64.b64decode(firebase_json_base64).decode("utf-8"))
+    elif firebase_json:
+        firebase_cred_source = json.loads(firebase_json)
+    elif firebase_path:
+        firebase_cred_source = firebase_path
+
+    if not firebase_cred_source:
+        raise RuntimeError(
+            "Configura FIREBASE_CREDENTIALS, FIREBASE_CREDENTIALS_JSON o FIREBASE_CREDENTIALS_JSON_BASE64"
+        )
+
+    cred = credentials.Certificate(firebase_cred_source)
 
     firebase_admin.initialize_app(cred)
 
@@ -73,7 +89,8 @@ import json
 # 🔥 usar ruta absoluta estable
 BASE_DIR = Path(__file__).resolve().parent
 
-TOKENS_FILE = BASE_DIR / "tokens.json"
+TOKENS_FILE = Path(os.getenv("TOKENS_FILE", BASE_DIR / "tokens.json")).resolve()
+TOKENS_FILE.parent.mkdir(parents=True, exist_ok=True)
 
 print("📁 TOKENS_FILE:", TOKENS_FILE)
 
@@ -131,10 +148,9 @@ def guardar_tokens():
             for k, v in tokens.items()
         }
 
-        # =========================
-        # GUARDAR JSON
-        # =========================
-        with open(TOKENS_FILE, "w", encoding="utf-8") as f:
+        tmp_file = TOKENS_FILE.with_suffix(TOKENS_FILE.suffix + ".tmp")
+
+        with open(tmp_file, "w", encoding="utf-8") as f:
 
             json.dump(
                 serializable,
@@ -142,6 +158,8 @@ def guardar_tokens():
                 indent=2,
                 ensure_ascii=False
             )
+
+        os.replace(tmp_file, TOKENS_FILE)
 
         total = sum(len(v) for v in serializable.values())
 
@@ -264,21 +282,39 @@ async def save_token(data: dict):
 
     print("📩 Token recibido")
 
-    token = data.get("token")
+    token = (data.get("token") or "").strip()
     sites = data.get("sites", [])
 
     if not token:
 
         print("❌ Token vacío")
 
-        return {"ok": False}
+        return JSONResponse({"ok": False, "error": "token_empty"}, status_code=400)
+
+    if not isinstance(sites, list):
+
+        print("âŒ Sites invÃ¡lidos")
+
+        return JSONResponse({"ok": False, "error": "sites_must_be_list"}, status_code=400)
+
+    valid_sites = []
+
+    for site in sites:
+
+        if site in SITES_BY_ID and site not in valid_sites:
+
+            valid_sites.append(site)
+
+        else:
+
+            print(f"âš ï¸ Site ignorado: {site!r}")
 
     # eliminar token previo
     for site_tokens in tokens.values():
         site_tokens.discard(token)
 
     # guardar nuevo
-    for site in sites:
+    for site in valid_sites:
 
         tokens[site].add(token)
 
@@ -287,7 +323,14 @@ async def save_token(data: dict):
     # 🔥 GUARDAR EN DISCO
     guardar_tokens()
 
-    return {"ok": True}
+    total = sum(len(v) for v in tokens.values())
+
+    return {
+        "ok": True,
+        "sites": valid_sites,
+        "token_saved": bool(valid_sites),
+        "total_tokens": total,
+    }
 
 
 @app.get("/test-alerts-now")
@@ -305,7 +348,16 @@ def test_alerts_now():
 
 @app.get("/firebase-messaging-sw.js")
 def sw():
-    return Response(((BASE_DIR / "firebase-messaging-sw.js").read_text(encoding="utf-8")), media_type="application/javascript")
+    return Response(
+        ((BASE_DIR / "firebase-messaging-sw.js").read_text(encoding="utf-8")),
+        media_type="application/javascript",
+        headers={"Cache-Control": "no-cache"},
+    )
+
+
+@app.get("/manifest.webmanifest")
+def manifest():
+    return FileResponse(BASE_DIR / "manifest.webmanifest", media_type="application/manifest+json")
 
 
 # ---------------------------
