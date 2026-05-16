@@ -37,15 +37,15 @@ import pandas as pd
 from fastapi import FastAPI, Response, WebSocket, WebSocketDisconnect
 from fastapi.responses import FileResponse, HTMLResponse, JSONResponse
 
-from api.saih_opendata import fetch_saih_signals
-from api.aemet_opendata import (
+from app.api.saih_opendata import fetch_saih_signals
+from app.api.aemet_opendata import (
     fetch_aemet_municipio_horaria,
     extract_rain_forecast_mm,
     extract_prob_precip_summary,
 )
 
-from prediccion_individual import predecir_semana_municipio
-from core.config import SITES, collect_all_tags
+from app.prediccion_individual import predecir_semana_municipio
+from app.core.config import SITES, collect_all_tags
 
 # from api.saih_opendata import fetch_saih_signals
 # from api.aemet_opendata import (
@@ -58,7 +58,7 @@ from core.config import SITES, collect_all_tags
 # from core.config import SITES, collect_all_tags
 
 from fastapi.staticfiles import StaticFiles
-import alertas
+from app import alertas
 
 from collections import defaultdict
 from pathlib import Path
