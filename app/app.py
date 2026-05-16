@@ -46,6 +46,7 @@ except Exception as e:
 from pathlib import Path
 from datetime import datetime
 import asyncio
+from concurrent.futures import ProcessPoolExecutor
 from typing import Dict, Any, Set, Optional
 
 import requests
@@ -187,6 +188,11 @@ POLL_SECONDS = 20
 AEMET_REFRESH_SECONDS = 1800
 AEMET_CHECK_SECONDS = 60
 STARTUP_BACKGROUND_DELAY_SECONDS = int(os.getenv("STARTUP_BACKGROUND_DELAY_SECONDS", "30"))
+IA_REFRESH_SECONDS = int(os.getenv("IA_REFRESH_SECONDS", "3600"))
+IA_WORKERS = int(os.getenv("IA_WORKERS", "1"))
+IA_PROCESS_POOL_ENABLED = os.getenv("IA_PROCESS_POOL_ENABLED", "1").lower() in {"1", "true", "yes"}
+IA_REFRESH_ON_WS = os.getenv("IA_REFRESH_ON_WS", "1").lower() in {"1", "true", "yes"}
+IA_EXECUTOR = ProcessPoolExecutor(max_workers=IA_WORKERS) if IA_PROCESS_POOL_ENABLED else None
 
 app = FastAPI()
 app.mount("/static", StaticFiles(directory=BASE_DIR), name="static")
@@ -231,6 +237,8 @@ saih_cache_by_site: Dict[str, Dict[str, Any]] = {}
 
 # IA cache por sitio
 ia_cache_by_site: Dict[str, Dict[str, Any]] = {}
+ia_inflight: set[str] = set()
+ia_epoch_by_site: Dict[str, float] = {}
 
 def _default_ia() -> Dict[str, Any]:
     return {
@@ -415,11 +423,31 @@ def _chunk(lst: list[str], n: int) -> list[list[str]]:
     return [lst[i:i+n] for i in range(0, len(lst), n)]
 
 
-async def refresh_ia_for_site(site_id: str) -> bool:
+async def _run_prediction(site_id: str):
+    if IA_EXECUTOR is not None:
+        loop = asyncio.get_running_loop()
+        return await loop.run_in_executor(IA_EXECUTOR, predecir_semana_municipio, site_id)
+
+    return await asyncio.to_thread(predecir_semana_municipio, site_id)
+
+
+async def refresh_ia_for_site(site_id: str, force: bool = False) -> bool:
+    if site_id in ia_inflight:
+        print(f"IA ya en curso para {site_id}")
+        return False
+
+    now_epoch = datetime.now().timestamp()
+    last_epoch = ia_epoch_by_site.get(site_id)
+
+    if not force and last_epoch is not None and (now_epoch - last_epoch) < IA_REFRESH_SECONDS:
+        return False
+
+    ia_inflight.add(site_id)
+
     print("🚀 IA para:", site_id)
 
     try:
-        pred = await asyncio.to_thread(predecir_semana_municipio, site_id)
+        pred = await _run_prediction(site_id)
 
         if pred is None:
             pred = []
@@ -429,6 +457,7 @@ async def refresh_ia_for_site(site_id: str) -> bool:
             "ia_error": None,
             "pred_semana": pred,
         }
+        ia_epoch_by_site[site_id] = now_epoch
 
         return True
 
@@ -441,6 +470,9 @@ async def refresh_ia_for_site(site_id: str) -> bool:
 
         traceback.print_exc()
         return False
+
+    finally:
+        ia_inflight.discard(site_id)
 
 async def refresh_aemet_for_site(site_id: str, force: bool = True) -> bool:
     """
@@ -554,7 +586,7 @@ async def ws(websocket: WebSocket):
         # Refrescos inmediatos en background
         async def _refresh_default():
             updated_aemet = await refresh_aemet_for_site(default_site, force=True)
-            updated_ia = await refresh_ia_for_site(default_site)
+            updated_ia = await refresh_ia_for_site(default_site) if IA_REFRESH_ON_WS else False
             if (updated_aemet or updated_ia) and websocket in clients and ws_site.get(websocket) == default_site:
                 await websocket.send_text(json.dumps(_build_payload(default_site, forced_is_new=True), ensure_ascii=False))
         asyncio.create_task(_refresh_default())
@@ -579,7 +611,7 @@ async def ws(websocket: WebSocket):
                     # 2) refrescos inmediatos
                     async def _refresh_and_push(site_id: str):
                         updated_aemet = await refresh_aemet_for_site(site_id, force=True)
-                        updated_ia = await refresh_ia_for_site(site_id)
+                        updated_ia = await refresh_ia_for_site(site_id) if IA_REFRESH_ON_WS else False
                         if updated_aemet or updated_ia:
                             if websocket in clients and ws_site.get(websocket) == site_id:
                                 await websocket.send_text(json.dumps(_build_payload(site_id, forced_is_new=True), ensure_ascii=False))
@@ -756,3 +788,9 @@ async def on_startup():
     asyncio.create_task(run_background_loop("AEMET LOOP", poll_aemet_loop))
     #asyncio.create_task(poll_ia_loop())
     asyncio.create_task(run_background_loop("ALERTAS LOOP", poll_alertas_loop))
+
+
+@app.on_event("shutdown")
+async def on_shutdown():
+    if IA_EXECUTOR is not None:
+        IA_EXECUTOR.shutdown(wait=False, cancel_futures=True)
