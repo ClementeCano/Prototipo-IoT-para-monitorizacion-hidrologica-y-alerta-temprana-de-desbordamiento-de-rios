@@ -62,6 +62,70 @@ from app import alertas
 
 from collections import defaultdict
 
+# =========================
+# TOKENS PERSISTENTES
+# =========================
+TOKENS_FILE = Path("tokens.json")
+
+
+def cargar_tokens():
+
+    if not TOKENS_FILE.exists():
+
+        print("⚠️ tokens.json no existe")
+
+        return defaultdict(set)
+
+    try:
+
+        with open(TOKENS_FILE, "r", encoding="utf-8") as f:
+
+            data = json.load(f)
+
+        print("✅ Tokens cargados")
+
+        return defaultdict(
+            set,
+            {
+                k: set(v)
+                for k, v in data.items()
+            }
+        )
+
+    except Exception as e:
+
+        print("❌ Error cargando tokens:", e)
+
+        return defaultdict(set)
+
+
+def guardar_tokens():
+
+    try:
+
+        serializable = {
+            k: list(v)
+            for k, v in tokens.items()
+        }
+
+        with open(TOKENS_FILE, "w", encoding="utf-8") as f:
+
+            json.dump(
+                serializable,
+                f,
+                indent=2,
+                ensure_ascii=False
+            )
+
+        print("💾 Tokens guardados")
+
+    except Exception as e:
+
+        print("❌ Error guardando tokens:", e)
+
+
+tokens = cargar_tokens()
+
 
 
 # ---------------------------
@@ -162,33 +226,65 @@ def api_sites():
         for s in SITES
     ])
 
-tokens = defaultdict(set)
+
 
 @app.post("/api/token")
 async def save_token(data: dict):
 
-    token = data.get("token")
-    sites = data.get("sites", [])
+    try:
 
-    if not token:
-        return {"ok": False}
+        token = data.get("token")
+        sites = data.get("sites", [])
 
-    # =========================
-    # ELIMINAR TOKEN ANTIGUO
-    # =========================
-    for site_tokens in tokens.values():
-        site_tokens.discard(token)
+        print("===================================")
+        print("📩 NUEVO TOKEN RECIBIDO")
+        print("📍 Sites:", sites)
+        print("🔥 Token:", token[:30] if token else "NONE")
+        print("===================================")
 
-    # =========================
-    # GUARDAR NUEVAS ALERTAS
-    # =========================
-    for site in sites:
+        if not token:
 
-        tokens[site].add(token)
+            return {
+                "ok": False,
+                "error": "Token vacío"
+            }
 
-        print(f"🔥 Token guardado en {site}")
+        # =========================
+        # ELIMINAR TOKEN ANTIGUO
+        # =========================
+        for site_tokens in tokens.values():
 
-    return {"ok": True}
+            site_tokens.discard(token)
+
+        # =========================
+        # GUARDAR NUEVOS
+        # =========================
+        for site in sites:
+
+            tokens[site].add(token)
+
+            print(f"✅ Token guardado en {site}")
+
+        guardar_tokens()
+
+        print("📦 TOKENS TOTALES:")
+
+        for k, v in tokens.items():
+
+            print(f"   {k}: {len(v)}")
+
+        return {"ok": True}
+
+    except Exception as e:
+
+        print("❌ ERROR /api/token:", e)
+
+        traceback.print_exc()
+
+        return {
+            "ok": False,
+            "error": str(e)
+        }
 
 
 @app.get("/test-alerts-now")
@@ -343,24 +439,39 @@ def send_notification(title: str, body: str):
     all_tokens = set()
 
     for site_tokens in tokens.values():
+
         all_tokens.update(site_tokens)
 
-    for token in all_tokens:
+    print(f"📤 Enviando push a {len(all_tokens)} dispositivos")
 
-        message = messaging.Message(
-            notification=messaging.Notification(
-                title=title,
-                body=body,
-            ),
-            token=token,
-        )
+    for token in list(all_tokens):
 
         try:
-            messaging.send(message)
-            print("✅ Notificación enviada")
+
+            message = messaging.Message(
+
+                notification=messaging.Notification(
+                    title=title,
+                    body=body,
+                ),
+
+                token=token,
+            )
+
+            response = messaging.send(message)
+
+            print("✅ PUSH OK:", response)
 
         except Exception as e:
+
             print("❌ Error enviando:", e)
+
+            # 🔥 ELIMINAR TOKENS INVÁLIDOS
+            for site_tokens in tokens.values():
+
+                site_tokens.discard(token)
+
+            guardar_tokens()
 
 
 # ---------------------------
