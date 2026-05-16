@@ -61,6 +61,7 @@ from fastapi.staticfiles import StaticFiles
 from app import alertas
 
 from collections import defaultdict
+from pathlib import Path
 
 # =========================
 # TOKENS PERSISTENTES
