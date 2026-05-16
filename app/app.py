@@ -186,9 +186,10 @@ POLL_SECONDS = 20
 # AEMET: refresco real cada 30 min, comprobación cada 60s
 AEMET_REFRESH_SECONDS = 1800
 AEMET_CHECK_SECONDS = 60
+STARTUP_BACKGROUND_DELAY_SECONDS = int(os.getenv("STARTUP_BACKGROUND_DELAY_SECONDS", "30"))
 
 app = FastAPI()
-app.mount("/static", StaticFiles(directory="."), name="static")
+app.mount("/static", StaticFiles(directory=BASE_DIR), name="static")
 
 SITES_BY_ID = {s["id"]: s for s in SITES}
 
@@ -274,6 +275,11 @@ def api_sites():
         }
         for s in SITES
     ])
+
+
+@app.get("/health")
+def health():
+    return {"ok": True}
 
 
 
@@ -730,9 +736,23 @@ async def poll_alertas_loop():
         # comprobar cada minuto
         await asyncio.sleep(60)
 
+
+async def run_background_loop(name: str, loop_factory):
+    if STARTUP_BACKGROUND_DELAY_SECONDS > 0:
+        await asyncio.sleep(STARTUP_BACKGROUND_DELAY_SECONDS)
+
+    try:
+        await loop_factory()
+    except asyncio.CancelledError:
+        raise
+    except Exception as e:
+        print(f"[{name} FATAL]", repr(e))
+        traceback.print_exc()
+
+
 @app.on_event("startup")
 async def on_startup():
-    asyncio.create_task(poll_saih_loop())
-    asyncio.create_task(poll_aemet_loop())
+    asyncio.create_task(run_background_loop("SAIH LOOP", poll_saih_loop))
+    asyncio.create_task(run_background_loop("AEMET LOOP", poll_aemet_loop))
     #asyncio.create_task(poll_ia_loop())
-    asyncio.create_task(poll_alertas_loop())
+    asyncio.create_task(run_background_loop("ALERTAS LOOP", poll_alertas_loop))
