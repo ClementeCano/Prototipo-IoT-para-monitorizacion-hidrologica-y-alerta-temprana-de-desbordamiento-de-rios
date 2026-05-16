@@ -1175,7 +1175,7 @@
         // =========================
         // TOKEN FIREBASE
         // =========================
-        firebaseToken = await getToken(messaging, {
+        firebaseToken = await messaging.getToken({
 
           vapidKey:
             "BCFznYCtRHRklZcr-XJ2jjnjvzIFV0OBPqcZXdZWJdJI7YT8GClCn-uc8Qi1fFT_zyicRQNrRxG7qo6uKJwWGng",
@@ -1198,6 +1198,11 @@
       } catch (err) {
 
         console.error("❌ ERROR Firebase:", err);
+
+        alert(
+          "Error Firebase:\n" +
+          (err?.message || JSON.stringify(err))
+        );
 
         return null;
       }
@@ -1240,6 +1245,7 @@
         // ENVIAR BACKEND
         // =========================
         const res = await fetch("/api/token", {
+          
 
           method: "POST",
 
@@ -1252,8 +1258,11 @@
             sites: selectedSites
           })
         });
+        console.log("🚀 Enviando token al backend...");
 
         const data = await res.json();
+        console.log("📡 STATUS:", res.status);
+        console.log("📦 RESPUESTA:", data);
 
         console.log("✅ Suscripciones guardadas:", data);
 
