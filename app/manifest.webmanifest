@@ -6,5 +6,7 @@
   "display": "standalone",
   "background_color": "#05070d",
   "theme_color": "#05070d",
-  "description": "Monitorizacion hidrologica y alertas tempranas del Rio Ebro"
+  "description": "Monitorizacion hidrologica y alertas tempranas del Rio Ebro",
+  "gcm_sender_id": "103953800507",
+  "gcm_user_visible_only": true
 }
