@@ -1,8 +1,11 @@
 import os
+import re
 import time
 from datetime import datetime, timedelta
+from threading import Lock
 from typing import Any, Dict, List, Optional, Tuple
 from zoneinfo import ZoneInfo
+from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
 
 import certifi
 import requests
@@ -18,6 +21,36 @@ except Exception:
 
 BASE = "https://opendata.aemet.es/opendata/api"
 TZ = ZoneInfo("Europe/Madrid")
+MIN_SECONDS_BETWEEN_REQUESTS = float(os.getenv("AEMET_MIN_SECONDS_BETWEEN_REQUESTS", "2"))
+_REQUEST_LOCK = Lock()
+_LAST_REQUEST_AT = 0.0
+
+
+def _redact_url(url: str) -> str:
+    parts = urlsplit(url)
+    query = [
+        (key, "***" if key.lower() == "api_key" else value)
+        for key, value in parse_qsl(parts.query, keep_blank_values=True)
+    ]
+    return urlunsplit((parts.scheme, parts.netloc, parts.path, urlencode(query), parts.fragment))
+
+
+def _redact_message(message: str) -> str:
+    return re.sub(r"api_key=[^&\s)]+", "api_key=***", message)
+
+
+def _rate_limit_aemet():
+    global _LAST_REQUEST_AT
+
+    if MIN_SECONDS_BETWEEN_REQUESTS <= 0:
+        return
+
+    with _REQUEST_LOCK:
+        now = time.monotonic()
+        wait = MIN_SECONDS_BETWEEN_REQUESTS - (now - _LAST_REQUEST_AT)
+        if wait > 0:
+            time.sleep(wait)
+        _LAST_REQUEST_AT = time.monotonic()
 
 
 def _build_session() -> requests.Session:
@@ -54,6 +87,7 @@ def _get_json(url: str, timeout: int = 60, pause_before_retry: float = 1.0):
 
     for attempt in range(1, 4):
         try:
+            _rate_limit_aemet()
             r = _SESSION.get(
                 url,
                 timeout=timeout,
@@ -63,17 +97,17 @@ def _get_json(url: str, timeout: int = 60, pause_before_retry: float = 1.0):
             return r.json()
 
         except requests.exceptions.SSLError as e:
-            last_error = RuntimeError(f"Error SSL al conectar con {url}: {e}")
+            last_error = f"Error SSL al conectar con {_redact_url(url)}: {_redact_message(str(e))}"
             break
 
         except requests.exceptions.RequestException as e:
-            last_error = e
+            last_error = f"{type(e).__name__}: {_redact_message(str(e))}"
             if attempt < 3:
                 time.sleep(pause_before_retry * attempt)
             else:
                 break
 
-    raise RuntimeError(f"Fallo al pedir JSON a {url}: {last_error}")
+    raise RuntimeError(f"Fallo al pedir JSON a {_redact_url(url)}: {last_error}")
 
 
 def fetch_aemet_municipio_horaria(municipio: str) -> List[Dict[str, Any]]:

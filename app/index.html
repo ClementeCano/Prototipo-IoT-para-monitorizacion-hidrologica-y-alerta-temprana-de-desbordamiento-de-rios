@@ -37,7 +37,11 @@
   }
 
   *{ box-sizing:border-box; }
-  html,body{ height:100%; }
+  html,body{
+    height:100%;
+    max-width:100%;
+    overflow-x:hidden;
+  }
   body{
     margin:0;
     padding: 28px 18px;
@@ -51,7 +55,11 @@
     letter-spacing: .15px;
   }
 
-  .layout{ max-width: 1180px; margin: 0 auto; }
+  .layout{
+    width:100%;
+    max-width: 1180px;
+    margin: 0 auto;
+  }
 
   h1{
     margin: 0 0 8px 0;
@@ -82,6 +90,7 @@
 
   .card{
     position: relative;
+    min-width: 0;
     background: linear-gradient(180deg, var(--glass2) 0%, var(--glass) 100%);
     border: 1px solid var(--stroke);
     border-radius: var(--r2);
@@ -104,6 +113,7 @@
 
   .row{
     display:flex;
+    min-width:0;
     gap: 10px;
     flex-wrap: wrap;
     align-items: center;
@@ -119,6 +129,9 @@
     background: rgba(255,255,255,.05);
     color: var(--text);
     font-size: 13px;
+    max-width:100%;
+    min-width:0;
+    overflow-wrap:anywhere;
     box-shadow: 0 1px 0 rgba(255,255,255,.08) inset;
   }
 
@@ -143,6 +156,15 @@
     grid-template-columns: 1fr 1fr;
     gap: 12px;
     margin-top: 14px;
+    min-width:0;
+  }
+
+  .topgrid > *,
+  .leftcol,
+  .kpi > *,
+  .chartwrap,
+  #map{
+    min-width:0;
   }
 
   .label{
@@ -218,10 +240,14 @@
     padding: 10px 12px;
     border-radius: 14px;
     display:none;
+    max-width:100%;
+    overflow-wrap:anywhere;
+    word-break:break-word;
   }
 
   table{
     width: 100%;
+    max-width:100%;
     border-collapse: separate;
     border-spacing: 0;
     margin-top: 12px;
@@ -235,6 +261,7 @@
     border-bottom: 1px solid rgba(255,255,255,.07);
     padding: 11px 10px;
     text-align: left;
+    overflow-wrap:anywhere;
   }
   th{
     font-size: 11.5px;
@@ -604,6 +631,43 @@
     let firebaseToken = null;
     let notificationsInitialized = null;
     let lastFirebaseError = null;
+
+    async function getFirebaseMessagingSupported() {
+      try {
+        return firebase.messaging.isSupported
+          ? await firebase.messaging.isSupported()
+          : null;
+      } catch (err) {
+        return null;
+      }
+    }
+
+    async function logPushDebug(event, extra = {}) {
+      try {
+        const selectedSitesCount = document.querySelectorAll("#alertsSites input:checked").length;
+
+        await fetch("/api/push-debug", {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json"
+          },
+          body: JSON.stringify({
+            event,
+            href: location.href,
+            userAgent: navigator.userAgent,
+            permission: "Notification" in window ? Notification.permission : "unsupported",
+            secureContext: window.isSecureContext,
+            serviceWorker: "serviceWorker" in navigator,
+            pushManager: "PushManager" in window,
+            firebaseMessagingSupported: await getFirebaseMessagingSupported(),
+            selectedSitesCount,
+            ...extra
+          })
+        });
+      } catch (err) {
+        console.warn("No se pudo enviar push-debug", err);
+      }
+    }
 
     function setConn(isUp) {
       connDot.className = "dot " + (isUp ? "ok" : "");
@@ -1033,10 +1097,12 @@
         const err = data.aemet_error ?? "";
         if (err) {
           aemetErr.style.display = "block";
-          aemetErr.textContent = `Error AEMET: ${err}`;
+          aemetErr.textContent = "Error AEMET: no se pudo actualizar la prediccion. Se reintentara automaticamente.";
+          aemetErr.title = err;
         } else {
           aemetErr.style.display = "none";
           aemetErr.textContent = "";
+          aemetErr.title = "";
         }
 
         mm6sum.textContent = data.aemet_mm_6h_sum ?? "-";
@@ -1180,8 +1246,10 @@
         }
 
         console.log("🔔 Iniciando notificaciones...");
+        await logPushDebug("init_start", { allowPrompt });
 
         const messagingInstance = await getMessagingInstance();
+        await logPushDebug("messaging_ready");
 
         // =========================
         // PERMISOS
@@ -1191,6 +1259,7 @@
         if (permission === "default") {
           if (!allowPrompt) {
             console.log("⏸️ Permiso pendiente; no se solicita fuera de una accion del usuario.");
+            await logPushDebug("permission_default_no_prompt");
             return null;
           }
 
@@ -1198,10 +1267,12 @@
         }
 
         console.log("Permiso:", permission);
+        await logPushDebug("permission_result", { permission });
 
         if (permission !== "granted") {
 
           console.log("❌ Permiso denegado");
+          await logPushDebug("permission_not_granted", { permission });
           return null;
         }
 
@@ -1220,6 +1291,9 @@
         await registered.update();
 
         console.log("✅ Service Worker registrado:", registered);
+        await logPushDebug("service_worker_registered", {
+          serviceWorkerScope: registered.scope
+        });
 
         // =========================
         // ESPERAR SW
@@ -1229,6 +1303,8 @@
         // =========================
         // TOKEN FIREBASE
         // =========================
+        await logPushDebug("get_token_start");
+
         firebaseToken = await messagingInstance.getToken({
           vapidKey: FCM_VAPID_KEY,
           serviceWorkerRegistration: registration
@@ -1237,10 +1313,12 @@
         if (!firebaseToken) {
 
           console.log("❌ No se generó token");
+          await logPushDebug("get_token_empty");
           return null;
         }
 
         console.log("🔥 TOKEN:", firebaseToken);
+        await logPushDebug("get_token_ok");
 
         notificationsInitialized = true;
 
@@ -1255,6 +1333,10 @@
         };
 
         console.error("❌ ERROR Firebase:", lastFirebaseError);
+        await logPushDebug("firebase_error", {
+          errorCode: lastFirebaseError.code,
+          errorMessage: lastFirebaseError.message
+        });
 
         alert(
           "Error Firebase:\n" +
@@ -1317,12 +1399,14 @@
         // ASEGURAR TOKEN
         // =========================
         await sitesReady;
+        await logPushDebug("subscription_start", { allowPrompt, requireSites });
 
         if (!firebaseToken) {
 
           const token = await initNotifications({ allowPrompt });
 
           if (!token) {
+            await logPushDebug("subscription_without_token");
             return;
           }
         }
@@ -1335,9 +1419,13 @@
         ).map(x => x.value);
 
         console.log("📍 Municipios:", selectedSites);
+        await logPushDebug("subscription_sites_selected", {
+          selectedSitesCount: selectedSites.length
+        });
 
         if (requireSites && selectedSites.length === 0) {
           console.log("⏸️ No se envia token: no hay municipios seleccionados.");
+          await logPushDebug("subscription_no_sites");
           return;
         }
 
@@ -1353,6 +1441,10 @@
         // ENVIAR BACKEND
         // =========================
         console.log("🚀 Enviando token al backend...");
+
+        await logPushDebug("api_token_post_start", {
+          selectedSitesCount: selectedSites.length
+        });
 
         const res = await fetch("/api/token", {
           
@@ -1372,6 +1464,12 @@
         const data = await res.json();
         console.log("📡 STATUS:", res.status);
         console.log("📦 RESPUESTA:", data);
+        await logPushDebug("api_token_post_response", {
+          selectedSitesCount: selectedSites.length,
+          responseStatus: res.status,
+          responseOk: res.ok,
+          tokenSaved: data?.token_saved
+        });
 
         if (!res.ok || !data.ok) {
           throw new Error(data.error || `HTTP ${res.status}`);
@@ -1382,6 +1480,9 @@
       } catch (err) {
 
         console.error("❌ Error enviando suscripciones:", err);
+        await logPushDebug("subscription_error", {
+          errorMessage: err?.message || String(err)
+        });
       }
     }
 

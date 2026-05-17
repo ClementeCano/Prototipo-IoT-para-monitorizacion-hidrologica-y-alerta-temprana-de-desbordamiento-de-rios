@@ -187,6 +187,7 @@ POLL_SECONDS = 20
 # AEMET: refresco real cada 30 min, comprobación cada 60s
 AEMET_REFRESH_SECONDS = 1800
 AEMET_CHECK_SECONDS = 60
+AEMET_ERROR_RETRY_SECONDS = int(os.getenv("AEMET_ERROR_RETRY_SECONDS", "300"))
 STARTUP_BACKGROUND_DELAY_SECONDS = int(os.getenv("STARTUP_BACKGROUND_DELAY_SECONDS", "30"))
 IA_REFRESH_SECONDS = int(os.getenv("IA_REFRESH_SECONDS", "3600"))
 IA_WORKERS = int(os.getenv("IA_WORKERS", "1"))
@@ -287,6 +288,25 @@ def api_sites():
 
 @app.get("/health")
 def health():
+    return {"ok": True}
+
+
+@app.post("/api/push-debug")
+async def push_debug(data: dict):
+    safe_data = {
+        "event": data.get("event"),
+        "permission": data.get("permission"),
+        "secureContext": data.get("secureContext"),
+        "serviceWorker": data.get("serviceWorker"),
+        "pushManager": data.get("pushManager"),
+        "firebaseMessagingSupported": data.get("firebaseMessagingSupported"),
+        "selectedSitesCount": data.get("selectedSitesCount"),
+        "errorCode": data.get("errorCode"),
+        "errorMessage": data.get("errorMessage"),
+        "href": data.get("href"),
+        "userAgent": data.get("userAgent"),
+    }
+    print("[PUSH DEBUG]", json.dumps(safe_data, ensure_ascii=False))
     return {"ok": True}
 
 
@@ -474,7 +494,7 @@ async def refresh_ia_for_site(site_id: str, force: bool = False) -> bool:
     finally:
         ia_inflight.discard(site_id)
 
-async def refresh_aemet_for_site(site_id: str, force: bool = True) -> bool:
+async def refresh_aemet_for_site(site_id: str, force: bool = False) -> bool:
     """
     Refresca AEMET para un site.
     - force=True: refresca aunque no haya vencido TTL (útil al seleccionar)
@@ -496,7 +516,8 @@ async def refresh_aemet_for_site(site_id: str, force: bool = True) -> bool:
     last_epoch = cur.get("_epoch")
 
     if not force:
-        if last_epoch is not None and (now_epoch - float(last_epoch)) < AEMET_REFRESH_SECONDS:
+        ttl = AEMET_ERROR_RETRY_SECONDS if cur.get("aemet_error") else AEMET_REFRESH_SECONDS
+        if last_epoch is not None and (now_epoch - float(last_epoch)) < ttl:
             return False
 
     aemet_inflight.add(site_id)
@@ -520,7 +541,7 @@ async def refresh_aemet_for_site(site_id: str, force: bool = True) -> bool:
             **prev,
             "_epoch": now_epoch,
             "aemet_refreshed_at": datetime.now().isoformat(timespec="seconds"),
-            "aemet_error": repr(e),
+            "aemet_error": str(e),
         }
         return True
 
@@ -585,7 +606,7 @@ async def ws(websocket: WebSocket):
 
         # Refrescos inmediatos en background
         async def _refresh_default():
-            updated_aemet = await refresh_aemet_for_site(default_site, force=True)
+            updated_aemet = await refresh_aemet_for_site(default_site, force=False)
             updated_ia = await refresh_ia_for_site(default_site) if IA_REFRESH_ON_WS else False
             if (updated_aemet or updated_ia) and websocket in clients and ws_site.get(websocket) == default_site:
                 await websocket.send_text(json.dumps(_build_payload(default_site, forced_is_new=True), ensure_ascii=False))
@@ -610,7 +631,7 @@ async def ws(websocket: WebSocket):
 
                     # 2) refrescos inmediatos
                     async def _refresh_and_push(site_id: str):
-                        updated_aemet = await refresh_aemet_for_site(site_id, force=True)
+                        updated_aemet = await refresh_aemet_for_site(site_id, force=False)
                         updated_ia = await refresh_ia_for_site(site_id) if IA_REFRESH_ON_WS else False
                         if updated_aemet or updated_ia:
                             if websocket in clients and ws_site.get(websocket) == site_id:
