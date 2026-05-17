@@ -1,5 +1,6 @@
 import os
 from datetime import datetime
+from zoneinfo import ZoneInfo
 from firebase_admin import messaging
 
 from app.prediccion_individual import predecir_semana_municipio
@@ -11,9 +12,18 @@ from app.umbrales import cargar_umbrales
 UMBRALES = cargar_umbrales()
 PUBLIC_BASE_URL = os.getenv("PUBLIC_BASE_URL", "https://dashboard-ebro.fly.dev").rstrip("/")
 PUSH_ICON_URL = f"{PUBLIC_BASE_URL}/static/icon.png"
+ALERT_HOUR = int(os.getenv("ALERT_HOUR", "8"))
+ALERT_TIMEZONE = os.getenv("ALERT_TIMEZONE", "Europe/Madrid")
 
 # evitar enviar múltiples veces el mismo día
 ULTIMO_ENVIO = None
+
+
+def _now_alert_tz():
+    try:
+        return datetime.now(ZoneInfo(ALERT_TIMEZONE))
+    except Exception:
+        return datetime.now()
 
 
 # =========================
@@ -176,11 +186,11 @@ def enviar_notificacion(tokens, titulo, cuerpo):
 # =========================
 # ALERTAS DIARIAS
 # =========================
-def enviar_alertas_diarias(tokens, sites):
+def enviar_alertas_diarias(tokens, sites, force=False):
 
     global ULTIMO_ENVIO
 
-    ahora = datetime.now()
+    ahora = _now_alert_tz()
 
     # =========================
     # SOLO UNA VEZ AL DÍA
@@ -191,16 +201,22 @@ def enviar_alertas_diarias(tokens, sites):
         "sent": 0,
         "invalid_tokens": set(),
         "processed_sites": 0,
+        "skipped": False,
+        "reason": None,
     }
 
     if ULTIMO_ENVIO == fecha_hoy:
+        result["skipped"] = True
+        result["reason"] = "already_sent_today"
         return result
 
     # =========================
     # SOLO A LAS 08:00
     # =========================
-    # if ahora.hour != 8:
-    #     return
+    if not force and ahora.hour != ALERT_HOUR:
+        result["skipped"] = True
+        result["reason"] = f"outside_alert_hour_{ALERT_HOUR}"
+        return result
 
     print("🚨 ENVIANDO ALERTAS DIARIAS")
 

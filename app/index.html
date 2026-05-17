@@ -384,6 +384,14 @@
       Probar este dispositivo
     </button>
 
+    <button onclick="testSelectedAlertsOnCurrentDevice()" class="alert-btn" style="margin-left:8px;">
+      Probar municipios seleccionados
+    </button>
+
+    <button onclick="removeCurrentDeviceAlerts()" class="alert-btn" style="margin-left:8px;">
+      Quitar este dispositivo
+    </button>
+
   </div>
 
   <!-- GRID PRINCIPAL -->
@@ -681,7 +689,8 @@
 
     async function logPushDebug(event, extra = {}) {
       try {
-        const selectedSitesCount = document.querySelectorAll("#alertsSites input:checked").length;
+        const selectedSites = getSelectedAlertSites();
+        const selectedSitesCount = selectedSites.length;
 
         await fetch("/api/push-debug", {
           method: "POST",
@@ -698,12 +707,19 @@
             pushManager: "PushManager" in window,
             firebaseMessagingSupported: await getFirebaseMessagingSupported(),
             selectedSitesCount,
+            selectedSites,
             ...extra
           })
         });
       } catch (err) {
         console.warn("No se pudo enviar push-debug", err);
       }
+    }
+
+    function getSelectedAlertSites() {
+      return Array.from(
+        document.querySelectorAll("#alertsSites input:checked")
+      ).map(x => x.value);
     }
 
     function setConn(isUp) {
@@ -1084,7 +1100,10 @@
 
             console.log("🔄 Cambio en alertas");
 
-            await enviarSuscripciones({ allowPrompt: true });
+            localStorage.setItem(
+              "alertSites",
+              JSON.stringify(getSelectedAlertSites())
+            );
           });
         });
 
@@ -1453,9 +1472,7 @@
         // =========================
         // MUNICIPIOS
         // =========================
-        const selectedSites = Array.from(
-          document.querySelectorAll("#alertsSites input:checked")
-        ).map(x => x.value);
+        const selectedSites = getSelectedAlertSites();
 
         console.log("📍 Municipios:", selectedSites);
         await logPushDebug("subscription_sites_selected", {
@@ -1653,6 +1670,102 @@
     }
   }
 
+  async function testSelectedAlertsOnCurrentDevice() {
+
+    try {
+
+      const selectedSites = getSelectedAlertSites();
+
+      if (selectedSites.length === 0) {
+        alert("Selecciona al menos un municipio");
+        return;
+      }
+
+      const token = await initNotifications({ allowPrompt: true });
+
+      if (!token) {
+        alert("No se ha podido generar token en este dispositivo");
+        return;
+      }
+
+      await logPushDebug("test_selected_alerts_start", {
+        tokenPrefix: token.slice(0, 15),
+        selectedSites
+      });
+
+      const res = await fetch("/api/test-selected-alerts", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json"
+        },
+        body: JSON.stringify({
+          token,
+          sites: selectedSites,
+          userAgent: navigator.userAgent,
+          platform: navigator.platform || null
+        })
+      });
+
+      const data = await res.json();
+
+      await logPushDebug("test_selected_alerts_response", {
+        tokenPrefix: token.slice(0, 15),
+        responseStatus: res.status,
+        responseOk: res.ok,
+        sent: data?.sent,
+        selectedSites: data?.sites || selectedSites
+      });
+
+      if (!res.ok || !data.ok) {
+        throw new Error(data.error || "La prueba no se ha enviado");
+      }
+
+      alert(`Prueba enviada a ${data.processed_sites} municipios seleccionados`);
+
+    } catch (err) {
+
+      console.error("Error probando municipios seleccionados:", err);
+      alert("Error probando municipios seleccionados");
+    }
+  }
+
+  async function removeCurrentDeviceAlerts() {
+
+    try {
+
+      const token = await initNotifications({ allowPrompt: true });
+
+      if (!token) {
+        alert("No se ha podido generar token en este dispositivo");
+        return;
+      }
+
+      document
+        .querySelectorAll("#alertsSites input")
+        .forEach(input => {
+          input.checked = false;
+        });
+
+      firebaseToken = token;
+
+      await enviarSuscripciones({ allowPrompt: true, requireSites: false });
+
+      localStorage.setItem("alertSites", "[]");
+      localStorage.setItem("alerts", "off");
+
+      const btn = document.getElementById("alertBtn");
+      btn.classList.remove("active");
+      btn.textContent = "ðŸ”” Activar alertas";
+
+      alert("Este dispositivo se ha quitado de las alertas");
+
+    } catch (err) {
+
+      console.error("Error quitando alertas:", err);
+      alert("Error quitando este dispositivo de las alertas");
+    }
+  }
+
   async function saveAlerts() {
 
     try {
@@ -1660,9 +1773,7 @@
       // =========================
       // GUARDAR ALERTAS
       // =========================
-      const selectedSitesBefore = Array.from(
-        document.querySelectorAll("#alertsSites input:checked")
-      );
+      const selectedSitesBefore = getSelectedAlertSites();
 
       if (selectedSitesBefore.length === 0) {
 
@@ -1680,9 +1791,7 @@
       // =========================
       // GUARDAR MUNICIPIOS
       // =========================
-      const selectedSites = Array.from(
-        document.querySelectorAll("#alertsSites input:checked")
-      ).map(x => x.value);
+      const selectedSites = getSelectedAlertSites();
 
       localStorage.setItem(
         "alertSites",

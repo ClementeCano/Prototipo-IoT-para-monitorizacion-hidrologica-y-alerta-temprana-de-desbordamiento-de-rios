@@ -227,8 +227,14 @@ SITES_BY_ID = {s["id"]: s for s in SITES}
 _dataset_modelo_cache: Optional[pd.DataFrame] = None
 
 
-def _filter_alert_sites(site_ids: Optional[str]):
+def _filter_alert_sites(site_ids: Optional[str], allow_all: bool = False):
     if not site_ids:
+        if allow_all:
+            return SITES
+
+        return []
+
+    if site_ids.lower().strip() == "all":
         return SITES
 
     requested = [
@@ -243,7 +249,7 @@ def _filter_alert_sites(site_ids: Optional[str]):
         if site_id in SITES_BY_ID
     ]
 
-    return selected or SITES
+    return selected
 
 
 # ---------------------------
@@ -343,6 +349,7 @@ async def push_debug(data: dict):
         "pushManager": data.get("pushManager"),
         "firebaseMessagingSupported": data.get("firebaseMessagingSupported"),
         "selectedSitesCount": data.get("selectedSitesCount"),
+        "selectedSites": data.get("selectedSites"),
         "errorCode": data.get("errorCode"),
         "errorMessage": data.get("errorMessage"),
         "tokenPrefix": data.get("tokenPrefix"),
@@ -443,21 +450,91 @@ async def test_token(data: dict):
     }
 
 
-@app.get("/test-alerts-now")
-async def test_alerts_now(sites: Optional[str] = None):
+@app.post("/api/test-selected-alerts")
+async def test_selected_alerts(data: dict):
+    token = (data.get("token") or "").strip()
+    sites = data.get("sites", [])
 
-    alertas.ULTIMO_ENVIO = None
-    alert_sites = _filter_alert_sites(sites)
+    if not token:
+        return JSONResponse({"ok": False, "error": "token_empty"}, status_code=400)
 
-    result = await asyncio.to_thread(
-        alertas.enviar_alertas_diarias,
-        tokens,
-        alert_sites
+    if not isinstance(sites, list) or not sites:
+        return JSONResponse({"ok": False, "error": "sites_required"}, status_code=400)
+
+    valid_sites = []
+
+    for site_id in sites:
+        if site_id in SITES_BY_ID and site_id not in valid_sites:
+            valid_sites.append(site_id)
+
+    if not valid_sites:
+        return JSONResponse({"ok": False, "error": "no_valid_sites"}, status_code=400)
+
+    alert_sites = [SITES_BY_ID[site_id] for site_id in valid_sites]
+    temp_tokens = defaultdict(set, {site_id: {token} for site_id in valid_sites})
+
+    print(
+        f"[PUSH TEST] Alertas seleccionadas solo a {token[:15]} "
+        f"sites={valid_sites}"
     )
+
+    previous_ultimo_envio = alertas.ULTIMO_ENVIO
+    alertas.ULTIMO_ENVIO = None
+
+    try:
+        result = await asyncio.to_thread(
+            alertas.enviar_alertas_diarias,
+            temp_tokens,
+            alert_sites,
+            True,
+        )
+    finally:
+        alertas.ULTIMO_ENVIO = previous_ultimo_envio
 
     removed = limpiar_tokens_invalidos(result.get("invalid_tokens"))
 
     return {
+        "ok": True,
+        "sent": result.get("sent", 0),
+        "processed_sites": result.get("processed_sites", 0),
+        "sites": valid_sites,
+        "invalid_subscriptions_removed": removed,
+        "tokenPrefix": token[:15],
+    }
+
+
+@app.get("/test-alerts-now")
+async def test_alerts_now(sites: Optional[str] = None, all_sites: bool = False):
+
+    alert_sites = _filter_alert_sites(sites, allow_all=all_sites)
+
+    if not alert_sites:
+        return JSONResponse(
+            {
+                "ok": False,
+                "error": "sites_required",
+                "message": "Indica municipios, por ejemplo /test-alerts-now?sites=miranda,palazuelos. Para probar todos usa ?sites=all.",
+            },
+            status_code=400,
+        )
+
+    previous_ultimo_envio = alertas.ULTIMO_ENVIO
+    alertas.ULTIMO_ENVIO = None
+
+    try:
+        result = await asyncio.to_thread(
+            alertas.enviar_alertas_diarias,
+            tokens,
+            alert_sites,
+            True,
+        )
+    finally:
+        alertas.ULTIMO_ENVIO = previous_ultimo_envio
+
+    removed = limpiar_tokens_invalidos(result.get("invalid_tokens"))
+
+    return {
+        "ok": True,
         "status": "alertas enviadas",
         "sent": result.get("sent", 0),
         "processed_sites": result.get("processed_sites", 0),
@@ -467,8 +544,8 @@ async def test_alerts_now(sites: Optional[str] = None):
 
 
 @app.get("/test-alert")
-async def test_alert(sites: Optional[str] = None):
-    return await test_alerts_now(sites=sites)
+async def test_alert(sites: Optional[str] = None, all_sites: bool = False):
+    return await test_alerts_now(sites=sites, all_sites=all_sites)
 
 
 @app.get("/firebase-messaging-sw.js")
