@@ -93,9 +93,30 @@ def calcular_nivel_alerta(municipio, predicciones):
 # =========================
 # ENVIAR PUSH
 # =========================
+def _is_invalid_token_error(exc):
+    text = str(exc).lower()
+    code = str(getattr(exc, "code", "") or getattr(exc, "error_code", "")).lower()
+    combined = f"{code} {text}"
+
+    return any(
+        marker in combined
+        for marker in (
+            "device unregistered",
+            "registration-token-not-registered",
+            "requested entity was not found",
+            "unregistered",
+            "invalid registration token",
+            "invalid-registration-token",
+        )
+    )
+
+
 def enviar_notificacion(tokens, titulo, cuerpo):
 
-    for token in tokens:
+    sent = 0
+    invalid_tokens = set()
+
+    for token in list(tokens):
 
         try:
 
@@ -111,11 +132,23 @@ def enviar_notificacion(tokens, titulo, cuerpo):
 
             messaging.send(message)
 
+            sent += 1
+
             print(f"✅ Notificación enviada a {token[:15]}")
 
         except Exception as e:
 
+            if _is_invalid_token_error(e):
+                invalid_tokens.add(token)
+                print(f"[PUSH CLEANUP] Token invalido detectado: {token[:15]}")
+
             print(f"❌ Error enviando push: {e}")
+
+
+    return {
+        "sent": sent,
+        "invalid_tokens": invalid_tokens,
+    }
 
 
 # =========================
@@ -132,8 +165,14 @@ def enviar_alertas_diarias(tokens, sites):
     # =========================
     fecha_hoy = ahora.strftime("%Y-%m-%d")
 
+    result = {
+        "sent": 0,
+        "invalid_tokens": set(),
+        "processed_sites": 0,
+    }
+
     if ULTIMO_ENVIO == fecha_hoy:
-        return
+        return result
 
     # =========================
     # SOLO A LAS 08:00
@@ -156,7 +195,7 @@ def enviar_alertas_diarias(tokens, sites):
             # =========================
             # TOKENS SUSCRITOS
             # =========================
-            tokens_municipio = tokens.get(site_id, set())
+            tokens_municipio = set(tokens.get(site_id, set()))
 
             if not tokens_municipio:
                 continue
@@ -196,13 +235,20 @@ def enviar_alertas_diarias(tokens, sites):
             # =========================
             # ENVIAR PUSH
             # =========================
-            enviar_notificacion(
+            push_result = enviar_notificacion(
                 tokens_municipio,
                 titulo,
                 mensaje
             )
 
-            print(f"📩 {nombre}: enviada a {len(tokens_municipio)} usuarios")
+            result["sent"] += push_result["sent"]
+            result["invalid_tokens"].update(push_result["invalid_tokens"])
+            result["processed_sites"] += 1
+
+            print(
+                f"📩 {nombre}: enviada a {push_result['sent']} usuarios "
+                f"({len(push_result['invalid_tokens'])} invalidos)"
+            )
 
         except Exception as e:
 
@@ -212,3 +258,5 @@ def enviar_alertas_diarias(tokens, sites):
     # MARCAR COMO ENVIADO
     # =========================
     ULTIMO_ENVIO = fecha_hoy
+
+    return result

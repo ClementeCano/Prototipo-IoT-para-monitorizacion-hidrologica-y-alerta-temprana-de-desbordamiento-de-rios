@@ -177,6 +177,29 @@ def guardar_tokens():
 tokens = cargar_tokens()
 
 
+def limpiar_tokens_invalidos(invalid_tokens):
+    invalid_tokens = set(t for t in (invalid_tokens or set()) if t)
+
+    if not invalid_tokens:
+        return 0
+
+    removed = 0
+
+    for site_tokens in tokens.values():
+        before = len(site_tokens)
+        site_tokens.difference_update(invalid_tokens)
+        removed += before - len(site_tokens)
+
+    if removed:
+        print(
+            f"[PUSH CLEANUP] Eliminadas {removed} suscripciones invalidas "
+            f"({len(invalid_tokens)} tokens unicos)"
+        )
+        guardar_tokens()
+
+    return removed
+
+
 
 # ---------------------------
 # Config
@@ -303,6 +326,7 @@ async def push_debug(data: dict):
         "selectedSitesCount": data.get("selectedSitesCount"),
         "errorCode": data.get("errorCode"),
         "errorMessage": data.get("errorMessage"),
+        "tokenPrefix": data.get("tokenPrefix"),
         "href": data.get("href"),
         "userAgent": data.get("userAgent"),
     }
@@ -318,6 +342,8 @@ async def save_token(data: dict):
 
     token = (data.get("token") or "").strip()
     sites = data.get("sites", [])
+    user_agent = (data.get("userAgent") or "")[:180]
+    client_platform = (data.get("platform") or "")[:80]
 
     if not token:
 
@@ -330,6 +356,11 @@ async def save_token(data: dict):
         print("âŒ Sites invÃ¡lidos")
 
         return JSONResponse({"ok": False, "error": "sites_must_be_list"}, status_code=400)
+
+    print(
+        f"[PUSH TOKEN] prefix={token[:15]} "
+        f"sites={len(sites)} platform={client_platform or '-'} ua={user_agent or '-'}"
+    )
 
     valid_sites = []
 
@@ -368,16 +399,29 @@ async def save_token(data: dict):
 
 
 @app.get("/test-alerts-now")
-def test_alerts_now():
+async def test_alerts_now():
 
     alertas.ULTIMO_ENVIO = None
 
-    alertas.enviar_alertas_diarias(
+    result = await asyncio.to_thread(
+        alertas.enviar_alertas_diarias,
         tokens,
         SITES
     )
 
-    return {"status": "alertas enviadas"}
+    removed = limpiar_tokens_invalidos(result.get("invalid_tokens"))
+
+    return {
+        "status": "alertas enviadas",
+        "sent": result.get("sent", 0),
+        "processed_sites": result.get("processed_sites", 0),
+        "invalid_subscriptions_removed": removed,
+    }
+
+
+@app.get("/test-alert")
+async def test_alert():
+    return await test_alerts_now()
 
 
 @app.get("/firebase-messaging-sw.js")
@@ -777,10 +821,13 @@ async def poll_alertas_loop():
 
         try:
 
-            alertas.enviar_alertas_diarias(
+            result = await asyncio.to_thread(
+                alertas.enviar_alertas_diarias,
                 tokens,
                 SITES
             )
+
+            limpiar_tokens_invalidos(result.get("invalid_tokens"))
 
         except Exception as e:
 

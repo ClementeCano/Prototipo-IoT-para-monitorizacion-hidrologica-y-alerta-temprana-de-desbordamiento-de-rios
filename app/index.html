@@ -1318,7 +1318,9 @@
         }
 
         console.log("🔥 TOKEN:", firebaseToken);
-        await logPushDebug("get_token_ok");
+        await logPushDebug("get_token_ok", {
+          tokenPrefix: firebaseToken.slice(0, 15)
+        });
 
         notificationsInitialized = true;
 
@@ -1443,7 +1445,8 @@
         console.log("🚀 Enviando token al backend...");
 
         await logPushDebug("api_token_post_start", {
-          selectedSitesCount: selectedSites.length
+          selectedSitesCount: selectedSites.length,
+          tokenPrefix: firebaseToken.slice(0, 15)
         });
 
         const res = await fetch("/api/token", {
@@ -1457,7 +1460,9 @@
 
           body: JSON.stringify({
             token: firebaseToken,
-            sites: selectedSites
+            sites: selectedSites,
+            userAgent: navigator.userAgent,
+            platform: navigator.platform || null
           })
         });
 
@@ -1468,7 +1473,8 @@
           selectedSitesCount: selectedSites.length,
           responseStatus: res.status,
           responseOk: res.ok,
-          tokenSaved: data?.token_saved
+          tokenSaved: data?.token_saved,
+          tokenPrefix: firebaseToken.slice(0, 15)
         });
 
         if (!res.ok || !data.ok) {
