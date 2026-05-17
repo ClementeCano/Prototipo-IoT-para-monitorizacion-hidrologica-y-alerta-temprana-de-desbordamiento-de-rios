@@ -380,6 +380,10 @@
       💾 Guardar alertas
     </button>
 
+    <button onclick="testCurrentDevicePush()" class="alert-btn" style="margin-left:8px;">
+      Probar este dispositivo
+    </button>
+
   </div>
 
   <!-- GRID PRINCIPAL -->
@@ -537,6 +541,36 @@
     let foregroundHandlerRegistered = false;
     let serviceWorkerRegistrationPromise = null;
 
+    async function showPushNotification(title, options = {}) {
+      if (Notification.permission !== "granted") return;
+
+      const notificationOptions = {
+        body: options.body || "",
+        icon: options.icon || "/static/icon.png",
+        badge: options.badge || "/static/icon.png",
+        tag: options.tag || "rio-ebro-alert",
+        renotify: true,
+        requireInteraction: true,
+        data: {
+          url: options.url || "/"
+        }
+      };
+
+      try {
+        const registration = await navigator.serviceWorker.ready;
+        await registration.showNotification(title, notificationOptions);
+        return;
+      } catch (err) {
+        console.warn("No se pudo mostrar notificacion via Service Worker", err);
+      }
+
+      try {
+        new Notification(title, notificationOptions);
+      } catch (err) {
+        console.warn("No se pudo mostrar notificacion en foreground", err);
+      }
+    }
+
     async function getMessagingInstance() {
       if (messaging) return messaging;
 
@@ -568,9 +602,12 @@
           const title = payload.notification?.title || payload.data?.title || "Alerta Rio";
           const body = payload.notification?.body || payload.data?.body || "";
 
-          if (Notification.permission === "granted") {
-            new Notification(title, { body });
-          }
+          showPushNotification(title, {
+            body,
+            icon: payload.notification?.icon || payload.data?.icon || "/static/icon.png",
+            tag: payload.data?.tag || "rio-ebro-alert",
+            url: payload.fcmOptions?.link || payload.data?.url || "/"
+          });
         });
 
         foregroundHandlerRegistered = true;
@@ -1566,6 +1603,55 @@
           });
       }
     });
+
+  async function testCurrentDevicePush() {
+
+    try {
+
+      const token = await initNotifications({ allowPrompt: true });
+
+      if (!token) {
+        alert("No se ha podido generar token en este dispositivo");
+        return;
+      }
+
+      await logPushDebug("test_current_device_start", {
+        tokenPrefix: token.slice(0, 15)
+      });
+
+      const res = await fetch("/api/test-token", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json"
+        },
+        body: JSON.stringify({
+          token,
+          userAgent: navigator.userAgent,
+          platform: navigator.platform || null
+        })
+      });
+
+      const data = await res.json();
+
+      await logPushDebug("test_current_device_response", {
+        tokenPrefix: token.slice(0, 15),
+        responseStatus: res.status,
+        responseOk: res.ok,
+        sent: data?.sent
+      });
+
+      if (!res.ok || !data.ok || !data.sent) {
+        throw new Error(data.error || "La prueba no se ha enviado");
+      }
+
+      alert("Prueba enviada a este dispositivo");
+
+    } catch (err) {
+
+      console.error("Error probando este dispositivo:", err);
+      alert("Error enviando prueba a este dispositivo");
+    }
+  }
 
   async function saveAlerts() {
 

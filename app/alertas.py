@@ -1,3 +1,4 @@
+import os
 from datetime import datetime
 from firebase_admin import messaging
 
@@ -8,6 +9,8 @@ from app.umbrales import cargar_umbrales
 # CONFIG
 # =========================
 UMBRALES = cargar_umbrales()
+PUBLIC_BASE_URL = os.getenv("PUBLIC_BASE_URL", "https://dashboard-ebro.fly.dev").rstrip("/")
+PUSH_ICON_URL = f"{PUBLIC_BASE_URL}/static/icon.png"
 
 # evitar enviar múltiples veces el mismo día
 ULTIMO_ENVIO = None
@@ -121,12 +124,31 @@ def enviar_notificacion(tokens, titulo, cuerpo):
         try:
 
             message = messaging.Message(
-
-                notification=messaging.Notification(
-                    title=titulo,
-                    body=cuerpo,
+                data={
+                    "title": str(titulo),
+                    "body": str(cuerpo),
+                    "url": "/",
+                    "tag": "rio-ebro-alert",
+                    "icon": PUSH_ICON_URL,
+                },
+                webpush=messaging.WebpushConfig(
+                    headers={
+                        "TTL": "86400",
+                        "Urgency": "high",
+                    },
+                    notification=messaging.WebpushNotification(
+                        title=str(titulo),
+                        body=str(cuerpo),
+                        icon=PUSH_ICON_URL,
+                        badge=PUSH_ICON_URL,
+                        tag="rio-ebro-alert",
+                        renotify=True,
+                        require_interaction=True,
+                    ),
+                    fcm_options=messaging.WebpushFCMOptions(
+                        link=f"{PUBLIC_BASE_URL}/"
+                    ),
                 ),
-
                 token=token,
             )
 

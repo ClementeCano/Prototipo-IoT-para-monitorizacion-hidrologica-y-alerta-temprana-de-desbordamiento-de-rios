@@ -227,6 +227,25 @@ SITES_BY_ID = {s["id"]: s for s in SITES}
 _dataset_modelo_cache: Optional[pd.DataFrame] = None
 
 
+def _filter_alert_sites(site_ids: Optional[str]):
+    if not site_ids:
+        return SITES
+
+    requested = [
+        site_id.strip()
+        for site_id in site_ids.split(",")
+        if site_id.strip()
+    ]
+
+    selected = [
+        SITES_BY_ID[site_id]
+        for site_id in requested
+        if site_id in SITES_BY_ID
+    ]
+
+    return selected or SITES
+
+
 # ---------------------------
 # WS state
 # ---------------------------
@@ -398,15 +417,42 @@ async def save_token(data: dict):
     }
 
 
+@app.post("/api/test-token")
+async def test_token(data: dict):
+    token = (data.get("token") or "").strip()
+
+    if not token:
+        return JSONResponse({"ok": False, "error": "token_empty"}, status_code=400)
+
+    print(f"[PUSH TEST] Enviando prueba solo a {token[:15]}")
+
+    result = await asyncio.to_thread(
+        alertas.enviar_notificacion,
+        {token},
+        "Prueba de alerta Rio Ebro",
+        "Esta notificacion va solo a este dispositivo.",
+    )
+
+    removed = limpiar_tokens_invalidos(result.get("invalid_tokens"))
+
+    return {
+        "ok": True,
+        "sent": result.get("sent", 0),
+        "invalid_subscriptions_removed": removed,
+        "tokenPrefix": token[:15],
+    }
+
+
 @app.get("/test-alerts-now")
-async def test_alerts_now():
+async def test_alerts_now(sites: Optional[str] = None):
 
     alertas.ULTIMO_ENVIO = None
+    alert_sites = _filter_alert_sites(sites)
 
     result = await asyncio.to_thread(
         alertas.enviar_alertas_diarias,
         tokens,
-        SITES
+        alert_sites
     )
 
     removed = limpiar_tokens_invalidos(result.get("invalid_tokens"))
@@ -415,13 +461,14 @@ async def test_alerts_now():
         "status": "alertas enviadas",
         "sent": result.get("sent", 0),
         "processed_sites": result.get("processed_sites", 0),
+        "sites": [site["id"] for site in alert_sites],
         "invalid_subscriptions_removed": removed,
     }
 
 
 @app.get("/test-alert")
-async def test_alert():
-    return await test_alerts_now()
+async def test_alert(sites: Optional[str] = None):
+    return await test_alerts_now(sites=sites)
 
 
 @app.get("/firebase-messaging-sw.js")

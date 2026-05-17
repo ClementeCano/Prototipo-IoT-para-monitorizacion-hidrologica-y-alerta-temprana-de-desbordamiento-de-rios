@@ -21,7 +21,11 @@ messaging.onBackgroundMessage((payload) => {
 
   const notificationOptions = {
     body: payload.notification?.body || payload.data?.body || "",
+    icon: payload.notification?.icon || payload.data?.icon || "/static/icon.png",
+    badge: payload.notification?.badge || payload.data?.badge || "/static/icon.png",
     tag: payload.data?.tag || "rio-ebro-alert",
+    renotify: true,
+    requireInteraction: true,
     data: {
       url: payload.fcmOptions?.link || payload.data?.url || "/"
     }
