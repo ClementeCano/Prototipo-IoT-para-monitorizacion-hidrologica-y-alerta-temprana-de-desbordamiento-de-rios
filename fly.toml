@@ -11,7 +11,8 @@ primary_region = 'cdg'
 [env]
   TOKENS_FILE = "/data/tokens.json"
   PUBLIC_BASE_URL = "https://dashboard-ebro.fly.dev"
-  ALERT_HOUR = "8"
+  ALERT_HOUR = "12"
+  ALERT_MINUTE = "17"
   ALERT_TIMEZONE = "Europe/Madrid"
 
 [[mounts]]

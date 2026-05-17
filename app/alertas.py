@@ -13,6 +13,7 @@ UMBRALES = cargar_umbrales()
 PUBLIC_BASE_URL = os.getenv("PUBLIC_BASE_URL", "https://dashboard-ebro.fly.dev").rstrip("/")
 PUSH_ICON_URL = f"{PUBLIC_BASE_URL}/static/icon.png"
 ALERT_HOUR = int(os.getenv("ALERT_HOUR", "8"))
+ALERT_MINUTE = int(os.getenv("ALERT_MINUTE", "0"))
 ALERT_TIMEZONE = os.getenv("ALERT_TIMEZONE", "Europe/Madrid")
 
 # evitar enviar múltiples veces el mismo día
@@ -211,11 +212,11 @@ def enviar_alertas_diarias(tokens, sites, force=False):
         return result
 
     # =========================
-    # SOLO A LAS 08:00
+    # SOLO A LA HORA CONFIGURADA
     # =========================
-    if not force and ahora.hour != ALERT_HOUR:
+    if not force and (ahora.hour != ALERT_HOUR or ahora.minute != ALERT_MINUTE):
         result["skipped"] = True
-        result["reason"] = f"outside_alert_hour_{ALERT_HOUR}"
+        result["reason"] = f"outside_alert_time_{ALERT_HOUR:02d}_{ALERT_MINUTE:02d}"
         return result
 
     print("🚨 ENVIANDO ALERTAS DIARIAS")
