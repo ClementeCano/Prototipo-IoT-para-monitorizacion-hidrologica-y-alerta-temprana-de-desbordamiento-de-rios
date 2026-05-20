@@ -13,6 +13,7 @@ primary_region = 'cdg'
   PUBLIC_BASE_URL = "https://dashboard-ebro.fly.dev"
   ALERT_HOUR = "12"
   ALERT_MINUTE = "17"
+  ALERT_CHECK_SECONDS = "5"
   ALERT_TIMEZONE = "Europe/Madrid"
 
 [[mounts]]

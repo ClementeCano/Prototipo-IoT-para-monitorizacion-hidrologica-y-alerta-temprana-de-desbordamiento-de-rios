@@ -230,6 +230,7 @@ POLL_SECONDS = 20
 AEMET_REFRESH_SECONDS = 1800
 AEMET_CHECK_SECONDS = 60
 AEMET_ERROR_RETRY_SECONDS = int(os.getenv("AEMET_ERROR_RETRY_SECONDS", "300"))
+ALERT_CHECK_SECONDS = max(1, int(os.getenv("ALERT_CHECK_SECONDS", "5")))
 STARTUP_BACKGROUND_DELAY_SECONDS = int(os.getenv("STARTUP_BACKGROUND_DELAY_SECONDS", "30"))
 IA_REFRESH_SECONDS = int(os.getenv("IA_REFRESH_SECONDS", "3600"))
 IA_WORKERS = int(os.getenv("IA_WORKERS", "1"))
@@ -1458,7 +1459,7 @@ async def poll_alertas_loop():
             due_users = user_store.users_due_for_alert()
 
             if not due_users:
-                await asyncio.sleep(60)
+                await asyncio.sleep(ALERT_CHECK_SECONDS)
                 continue
 
             result = await asyncio.to_thread(
@@ -1483,13 +1484,14 @@ async def poll_alertas_loop():
 
             print("[ALERTAS ERROR]", e)
 
-        # comprobar cada minuto
-        await asyncio.sleep(60)
+        await asyncio.sleep(ALERT_CHECK_SECONDS)
 
 
-async def run_background_loop(name: str, loop_factory):
-    if STARTUP_BACKGROUND_DELAY_SECONDS > 0:
-        await asyncio.sleep(STARTUP_BACKGROUND_DELAY_SECONDS)
+async def run_background_loop(name: str, loop_factory, startup_delay: Optional[int] = None):
+    delay = STARTUP_BACKGROUND_DELAY_SECONDS if startup_delay is None else startup_delay
+
+    if delay > 0:
+        await asyncio.sleep(delay)
 
     try:
         await loop_factory()
@@ -1505,7 +1507,7 @@ async def on_startup():
     asyncio.create_task(run_background_loop("SAIH LOOP", poll_saih_loop))
     asyncio.create_task(run_background_loop("AEMET LOOP", poll_aemet_loop))
     #asyncio.create_task(poll_ia_loop())
-    asyncio.create_task(run_background_loop("ALERTAS LOOP", poll_alertas_loop))
+    asyncio.create_task(run_background_loop("ALERTAS LOOP", poll_alertas_loop, startup_delay=0))
 
 
 @app.on_event("shutdown")

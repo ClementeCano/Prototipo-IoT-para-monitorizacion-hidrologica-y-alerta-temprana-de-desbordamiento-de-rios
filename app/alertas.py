@@ -360,7 +360,28 @@ def _build_email_body(user: dict[str, Any], alerts: list[dict[str, Any]]) -> str
     return "\n".join(lines)
 
 
-def enviar_alerta_usuario(user: dict[str, Any], sites: list[dict[str, Any]]) -> dict[str, Any]:
+def _site_alert_from_cache(
+    site: dict[str, Any],
+    alert_cache: dict[str, dict[str, Any]] | None,
+) -> dict[str, Any]:
+    site_id = site["id"]
+
+    if alert_cache is not None and site_id in alert_cache:
+        return alert_cache[site_id]
+
+    alert = construir_alerta_site(site)
+
+    if alert_cache is not None:
+        alert_cache[site_id] = alert
+
+    return alert
+
+
+def enviar_alerta_usuario(
+    user: dict[str, Any],
+    sites: list[dict[str, Any]],
+    alert_cache: dict[str, dict[str, Any]] | None = None,
+) -> dict[str, Any]:
     preferences = user.get("preferences") or {}
     channel = preferences.get("notification_channel", "push")
     selected_sites = _selected_sites_for_user(user, sites)
@@ -386,7 +407,7 @@ def enviar_alerta_usuario(user: dict[str, Any], sites: list[dict[str, Any]]) -> 
 
     for site in selected_sites:
         try:
-            site_alerts.append(construir_alerta_site(site))
+            site_alerts.append(_site_alert_from_cache(site, alert_cache))
             result["processed_sites"] += 1
         except Exception as exc:
             error = f"{site.get('id')}: {exc}"
@@ -447,8 +468,10 @@ def enviar_alertas_usuarios(users: list[dict[str, Any]], sites: list[dict[str, A
         "errors": [],
     }
 
+    alert_cache: dict[str, dict[str, Any]] = {}
+
     for user in users:
-        user_result = enviar_alerta_usuario(user, sites)
+        user_result = enviar_alerta_usuario(user, sites, alert_cache=alert_cache)
         user_id = user.get("id")
 
         result["sent"] += user_result["sent"]
