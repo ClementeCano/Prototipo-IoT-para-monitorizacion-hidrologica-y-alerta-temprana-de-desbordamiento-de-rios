@@ -101,9 +101,12 @@ import json
 
 # 🔥 usar ruta absoluta estable
 BASE_DIR = Path(__file__).resolve().parent
+DATA_DIR = Path(os.getenv("DATA_DIR", BASE_DIR)).resolve()
+DATA_DIR.mkdir(parents=True, exist_ok=True)
 
-TOKENS_FILE = Path(os.getenv("TOKENS_FILE", BASE_DIR / "tokens.json")).resolve()
+TOKENS_FILE = Path(os.getenv("TOKENS_FILE", DATA_DIR / "tokens.json")).resolve()
 TOKENS_FILE.parent.mkdir(parents=True, exist_ok=True)
+print("DATA_DIR:", DATA_DIR)
 
 print("📁 TOKENS_FILE:", TOKENS_FILE)
 
@@ -244,6 +247,7 @@ app.mount("/static", StaticFiles(directory=BASE_DIR), name="static")
 
 SITES_BY_ID = {s["id"]: s for s in SITES}
 user_store = UserStore(sites_by_id=SITES_BY_ID)
+print("USERS_FILE:", user_store.path)
 
 SESSION_COOKIE_NAME = os.getenv("SESSION_COOKIE_NAME", "rio_session")
 SESSION_COOKIE_SECURE = os.getenv("SESSION_COOKIE_SECURE", "0").lower() in {"1", "true", "yes"}
@@ -797,7 +801,7 @@ def _persist_push_subscription(
 @app.post("/api/token")
 async def save_token(data: dict, request: Request):
 
-    print("📩 Token recibido")
+    print("[PUSH TOKEN] Token recibido")
 
     user = _require_user(request)
 
@@ -808,13 +812,13 @@ async def save_token(data: dict, request: Request):
 
     if not token:
 
-        print("❌ Token vacío")
+        print("[PUSH TOKEN] Token vacio")
 
         return JSONResponse({"ok": False, "error": "token_empty"}, status_code=400)
 
     if not isinstance(sites, list):
 
-        print("âŒ Sites invÃ¡lidos")
+        print("[PUSH TOKEN] Sites invalidos")
 
         return JSONResponse({"ok": False, "error": "sites_must_be_list"}, status_code=400)
 
@@ -823,28 +827,27 @@ async def save_token(data: dict, request: Request):
         f"sites={len(sites)} platform={client_platform or '-'} ua={user_agent or '-'}"
     )
 
-    valid_sites = []
-
-    for site in sites:
-
-        if site in SITES_BY_ID and site not in valid_sites:
-
-            valid_sites.append(site)
-
-        else:
-
-            print(f"âš ï¸ Site ignorado: {site!r}")
-
     try:
-        public_user = user_store.save_push_subscription(
-            user["id"],
+        subscription = _persist_push_subscription(
+            user,
             token,
-            valid_sites,
+            sites,
             user_agent=user_agent,
             platform=client_platform,
         )
     except UserStoreError as e:
         return JSONResponse({"ok": False, "error": str(e)}, status_code=400)
+    except RuntimeError as e:
+        if str(e) == "tokens_storage_error":
+            return JSONResponse(
+                {
+                    "ok": False,
+                    "error": "tokens_storage_error",
+                    "message": "No se ha podido guardar el token push en el servidor.",
+                },
+                status_code=500,
+            )
+        raise
     except Exception as e:
         print(f"[PUSH TOKEN ERROR] users_file={user_store.path} error={repr(e)}")
         return JSONResponse(
@@ -856,36 +859,9 @@ async def save_token(data: dict, request: Request):
             status_code=500,
         )
 
-    # eliminar token previo
-    for site_tokens in tokens.values():
-        site_tokens.discard(token)
-
-    # guardar nuevo
-    for site in valid_sites:
-
-        tokens[site].add(token)
-
-        print(f"🔥 Token guardado en {site}")
-
-    # 🔥 GUARDAR EN DISCO
-    if not guardar_tokens():
-        return JSONResponse(
-            {
-                "ok": False,
-                "error": "tokens_storage_error",
-                "message": "No se ha podido guardar el token push en el servidor.",
-            },
-            status_code=500,
-        )
-
-    total = sum(len(v) for v in tokens.values())
-
     return {
         "ok": True,
-        "sites": valid_sites,
-        "token_saved": bool(valid_sites),
-        "total_tokens": total,
-        "user": public_user,
+        **subscription,
     }
 
 

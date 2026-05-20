@@ -18,6 +18,7 @@ except Exception:
 
 URL = "https://www.saihebro.com/datos/apiopendata"
 HISTORY_REQUEST_DELAY_SECONDS = float(os.getenv("SAIH_HISTORY_REQUEST_DELAY_SECONDS", "0.1"))
+SAIH_VERIFY_SSL = os.getenv("SAIH_VERIFY_SSL", "1").lower() not in {"0", "false", "no"}
 
 
 def _build_session() -> requests.Session:
@@ -66,7 +67,7 @@ def _safe_get(url: str, params: dict, timeout=(6, 20)):
                 url,
                 params=params,
                 timeout=timeout,
-                verify=False,  # DESACTIVADO para evitar errores SSL en algunos entornos (usar con precaución)
+                verify=certifi.where() if SAIH_VERIFY_SSL else False,
             )
             r.raise_for_status()
             return r.json()

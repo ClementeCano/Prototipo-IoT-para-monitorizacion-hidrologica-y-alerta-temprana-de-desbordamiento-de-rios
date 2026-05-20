@@ -13,7 +13,8 @@ from zoneinfo import ZoneInfo
 
 
 BASE_DIR = Path(__file__).resolve().parent
-USERS_FILE = Path(os.getenv("USERS_FILE", BASE_DIR / "users.json")).resolve()
+DATA_DIR = Path(os.getenv("DATA_DIR", BASE_DIR)).resolve()
+USERS_FILE = Path(os.getenv("USERS_FILE", DATA_DIR / "users.json")).resolve()
 SESSION_DAYS = int(os.getenv("SESSION_DAYS", "30"))
 ALERT_TIMEZONE = os.getenv("ALERT_TIMEZONE", "Europe/Madrid")
 

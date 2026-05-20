@@ -21,3 +21,5 @@ Thumbs.db
 # Datos locales de usuarios
 app/users.json
 app/users.json.tmp
+app/tokens.json
+app/tokens.json.tmp

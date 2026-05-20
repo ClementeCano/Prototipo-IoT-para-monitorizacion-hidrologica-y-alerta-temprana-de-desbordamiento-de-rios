@@ -9,7 +9,10 @@ primary_region = 'cdg'
 [build]
 
 [env]
+  DATA_DIR = "/data"
+  USERS_FILE = "/data/users.json"
   TOKENS_FILE = "/data/tokens.json"
+  SESSION_COOKIE_SECURE = "1"
   PUBLIC_BASE_URL = "https://dashboard-ebro.fly.dev"
   ALERT_HOUR = "12"
   ALERT_MINUTE = "17"
