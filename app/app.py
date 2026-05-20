@@ -177,10 +177,12 @@ def guardar_tokens():
         total = sum(len(v) for v in serializable.values())
 
         print(f"💾 Tokens guardados ({total} tokens)")
+        return True
 
     except Exception as e:
 
         print("❌ Error guardando tokens:", repr(e))
+        return False
 
 
 # =========================
@@ -801,6 +803,16 @@ async def save_token(data: dict, request: Request):
         )
     except UserStoreError as e:
         return JSONResponse({"ok": False, "error": str(e)}, status_code=400)
+    except Exception as e:
+        print(f"[PUSH TOKEN ERROR] users_file={user_store.path} error={repr(e)}")
+        return JSONResponse(
+            {
+                "ok": False,
+                "error": "push_storage_error",
+                "message": "No se ha podido guardar el token push en el usuario.",
+            },
+            status_code=500,
+        )
 
     # eliminar token previo
     for site_tokens in tokens.values():
@@ -814,7 +826,15 @@ async def save_token(data: dict, request: Request):
         print(f"🔥 Token guardado en {site}")
 
     # 🔥 GUARDAR EN DISCO
-    guardar_tokens()
+    if not guardar_tokens():
+        return JSONResponse(
+            {
+                "ok": False,
+                "error": "tokens_storage_error",
+                "message": "No se ha podido guardar el token push en el servidor.",
+            },
+            status_code=500,
+        )
 
     total = sum(len(v) for v in tokens.values())
 
@@ -851,6 +871,7 @@ async def test_token(data: dict, request: Request):
         "ok": True,
         "sent": result.get("sent", 0),
         "invalid_subscriptions_removed": removed,
+        "errors": result.get("errors", []),
         "tokenPrefix": token[:15],
     }
 
@@ -1380,7 +1401,14 @@ async def poll_alertas_loop():
             limpiar_tokens_invalidos(result.get("invalid_tokens"))
 
             for user_id, user_result in result.get("per_user", {}).items():
-                user_store.mark_alert_result(user_id, user_result)
+                if int(user_result.get("sent", 0)) > 0:
+                    user_store.mark_alert_result(user_id, user_result)
+                else:
+                    print(
+                        "[ALERTAS LOOP] No se marca como enviada "
+                        f"user_id={user_id} reason={user_result.get('reason')} "
+                        f"errors={user_result.get('errors')}"
+                    )
 
         except Exception as e:
 

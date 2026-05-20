@@ -2158,7 +2158,7 @@
       const data = await res.json().catch(() => ({}));
 
       if (!res.ok || data.ok === false) {
-        throw new Error(data.error || data.detail || `HTTP ${res.status}`);
+        throw new Error(data.message || data.error || data.detail || `HTTP ${res.status}`);
       }
 
       return data;
@@ -3043,7 +3043,10 @@
 
           if (!token) {
             await logPushDebug("subscription_without_token");
-            return;
+            if (requireSites) {
+              throw new Error("No se ha podido generar el token push en este dispositivo.");
+            }
+            return null;
           }
         }
 
@@ -3060,7 +3063,7 @@
         if (requireSites && selectedSites.length === 0) {
           console.log("⏸️ No se envia token: no hay municipios seleccionados.");
           await logPushDebug("subscription_no_sites");
-          return;
+          throw new Error("Selecciona al menos un municipio");
         }
 
         // =========================
@@ -3110,7 +3113,11 @@
         });
 
         if (!res.ok || !data.ok) {
-          throw new Error(data.error || `HTTP ${res.status}`);
+          throw new Error(data.message || data.error || `HTTP ${res.status}`);
+        }
+
+        if (requireSites && !data.token_saved) {
+          throw new Error("El servidor no ha guardado el token push.");
         }
 
         if (data.user) {
@@ -3119,6 +3126,7 @@
         }
 
         console.log("✅ Suscripciones guardadas:", data);
+        return data;
 
       } catch (err) {
 
@@ -3126,6 +3134,7 @@
         await logPushDebug("subscription_error", {
           errorMessage: err?.message || String(err)
         });
+        throw err;
       }
     }
 
@@ -3158,6 +3167,9 @@
             if (token) {
               return enviarSuscripciones({ allowPrompt: false, requireSites: true });
             }
+            return null;
+          }).catch((err) => {
+            console.warn("No se han podido restaurar las suscripciones push:", err);
           });
         }
       });
@@ -3313,7 +3325,7 @@
 
     } catch (err) {
       console.error(err);
-      alert(err.message === "auth_required" ? "Inicia sesión para guardar" : "❌ Error guardando alertas");
+      alert(err.message === "auth_required" ? "Inicia sesión para guardar" : (err.message || "Error guardando alertas"));
     }
   };
 

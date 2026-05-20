@@ -6,6 +6,7 @@ from email.message import EmailMessage
 from typing import Any
 from zoneinfo import ZoneInfo
 
+import firebase_admin
 from firebase_admin import messaging
 
 for stream in (sys.stdout, sys.stderr):
@@ -198,10 +199,20 @@ def _is_invalid_token_error(exc):
     )
 
 
-def enviar_notificacion(tokens, titulo, cuerpo):
+def enviar_notificacion(tokens, titulo, cuerpo, tag="rio-ebro-alert", url="/"):
 
     sent = 0
     invalid_tokens = set()
+    errors = []
+
+    if not firebase_admin._apps:
+        error = "firebase_not_initialized"
+        print(f"❌ Error enviando push: {error}")
+        return {
+            "sent": sent,
+            "invalid_tokens": invalid_tokens,
+            "errors": [error],
+        }
 
     for token in list(tokens):
 
@@ -211,8 +222,8 @@ def enviar_notificacion(tokens, titulo, cuerpo):
                 data={
                     "title": str(titulo),
                     "body": str(cuerpo),
-                    "url": "/",
-                    "tag": "rio-ebro-alert",
+                    "url": str(url or "/"),
+                    "tag": str(tag or "rio-ebro-alert"),
                     "icon": PUSH_ICON_URL,
                 },
                 webpush=messaging.WebpushConfig(
@@ -225,7 +236,7 @@ def enviar_notificacion(tokens, titulo, cuerpo):
                         body=str(cuerpo),
                         icon=PUSH_ICON_URL,
                         badge=PUSH_ICON_URL,
-                        tag="rio-ebro-alert",
+                        tag=str(tag or "rio-ebro-alert"),
                         renotify=True,
                         require_interaction=True,
                     ),
@@ -248,12 +259,14 @@ def enviar_notificacion(tokens, titulo, cuerpo):
                 invalid_tokens.add(token)
                 print(f"[PUSH CLEANUP] Token invalido detectado: {token[:15]}")
 
+            errors.append(str(e))
             print(f"❌ Error enviando push: {e}")
 
 
     return {
         "sent": sent,
         "invalid_tokens": invalid_tokens,
+        "errors": errors,
     }
 
 
@@ -412,10 +425,12 @@ def enviar_alerta_usuario(user: dict[str, Any], sites: list[dict[str, Any]]) -> 
             push_tokens,
             alert["titulo"],
             alert["mensaje"],
+            tag=f"rio-ebro-alert-{alert['site_id']}",
         )
         result["push_sent"] += push_result["sent"]
         result["sent"] += push_result["sent"]
         result["invalid_tokens"].update(push_result["invalid_tokens"])
+        result["errors"].extend(push_result.get("errors", []))
 
     return result
 
@@ -472,6 +487,7 @@ def enviar_alertas_diarias(tokens, sites, force=False):
         "processed_sites": 0,
         "skipped": False,
         "reason": None,
+        "errors": [],
     }
 
     if ULTIMO_ENVIO == fecha_hoy:
@@ -528,11 +544,13 @@ def enviar_alertas_diarias(tokens, sites, force=False):
             push_result = enviar_notificacion(
                 tokens_municipio,
                 titulo,
-                mensaje
+                mensaje,
+                tag=f"rio-ebro-alert-{site_id}",
             )
 
             result["sent"] += push_result["sent"]
             result["invalid_tokens"].update(push_result["invalid_tokens"])
+            result["errors"].extend(push_result.get("errors", []))
             result["processed_sites"] += 1
 
             print(

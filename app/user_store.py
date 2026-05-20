@@ -493,10 +493,26 @@ class UserStore:
                 if not preferences.get("sites"):
                     continue
 
+                if preferences.get("notification_channel") == "push":
+                    has_push_token = any(
+                        (device.get("token") or "").strip()
+                        for device in user.get("devices", [])
+                    )
+                    if not has_push_token:
+                        continue
+
                 if not force:
                     if preferences.get("alert_time") != current_time:
                         continue
-                    if (user.get("alert_state") or {}).get("last_sent_date") == today:
+
+                    alert_state = user.get("alert_state") or {}
+                    last_result = alert_state.get("last_result") or {}
+                    try:
+                        last_sent = int(last_result.get("sent", 0) or 0)
+                    except (TypeError, ValueError):
+                        last_sent = 0
+
+                    if alert_state.get("last_sent_date") == today and last_sent > 0:
                         continue
 
                 due.append(deepcopy(user))
