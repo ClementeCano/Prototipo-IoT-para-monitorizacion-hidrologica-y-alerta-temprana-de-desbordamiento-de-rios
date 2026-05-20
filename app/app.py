@@ -752,6 +752,47 @@ async def push_debug(data: dict):
 
 
 
+def _persist_push_subscription(
+    user: dict,
+    token: str,
+    sites: list,
+    user_agent: str = "",
+    platform: str = "",
+) -> dict:
+    valid_sites = []
+
+    for site in sites:
+        if site in SITES_BY_ID and site not in valid_sites:
+            valid_sites.append(site)
+        else:
+            print(f"⚠️ Site ignorado: {site!r}")
+
+    public_user = user_store.save_push_subscription(
+        user["id"],
+        token,
+        valid_sites,
+        user_agent=user_agent,
+        platform=platform,
+    )
+
+    for site_tokens in tokens.values():
+        site_tokens.discard(token)
+
+    for site in valid_sites:
+        tokens[site].add(token)
+        print(f"🔥 Token guardado en {site}")
+
+    if not guardar_tokens():
+        raise RuntimeError("tokens_storage_error")
+
+    return {
+        "sites": valid_sites,
+        "token_saved": bool(valid_sites),
+        "total_tokens": sum(len(v) for v in tokens.values()),
+        "user": public_user,
+    }
+
+
 @app.post("/api/token")
 async def save_token(data: dict, request: Request):
 
@@ -881,6 +922,8 @@ async def test_selected_alerts(data: dict, request: Request):
     user = _require_user(request)
     token = (data.get("token") or "").strip()
     sites = data.get("sites", [])
+    user_agent = (data.get("userAgent") or "")[:180]
+    client_platform = (data.get("platform") or "")[:80]
 
     if not isinstance(sites, list) or not sites:
         return JSONResponse({"ok": False, "error": "sites_required"}, status_code=400)
@@ -905,9 +948,34 @@ async def test_selected_alerts(data: dict, request: Request):
         "devices": user.get("devices", []),
     }
 
+    subscription = None
+
     if preferences.get("notification_channel") != "email":
         if not token:
             return JSONResponse({"ok": False, "error": "token_empty"}, status_code=400)
+
+        try:
+            subscription = _persist_push_subscription(
+                user,
+                token,
+                valid_sites,
+                user_agent=user_agent,
+                platform=client_platform,
+            )
+        except UserStoreError as e:
+            return JSONResponse({"ok": False, "error": str(e)}, status_code=400)
+        except RuntimeError as e:
+            if str(e) == "tokens_storage_error":
+                return JSONResponse(
+                    {
+                        "ok": False,
+                        "error": "tokens_storage_error",
+                        "message": "No se ha podido guardar el token push en el servidor.",
+                    },
+                    status_code=500,
+                )
+            raise
+
         temp_user["devices"] = [{"token": token}]
 
     print(f"[ALERT TEST] user={user.get('email')} channel={preferences.get('notification_channel')} sites={valid_sites}")
@@ -927,6 +995,7 @@ async def test_selected_alerts(data: dict, request: Request):
         "sites": valid_sites,
         "invalid_subscriptions_removed": removed,
         "channel": preferences.get("notification_channel"),
+        "token_saved": subscription.get("token_saved") if subscription else None,
         "errors": result.get("errors", []),
         "tokenPrefix": token[:15] if token else None,
     }

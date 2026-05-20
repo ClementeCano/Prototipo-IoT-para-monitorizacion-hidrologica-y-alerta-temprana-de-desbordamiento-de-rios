@@ -72,6 +72,12 @@ def _normalize_alert_time(value: str) -> str:
     return f"{hour:02d}:{minute:02d}"
 
 
+def _minutes_from_alert_time(value: str) -> int:
+    normalized = _normalize_alert_time(value)
+    hour, minute = normalized.split(":", 1)
+    return int(hour) * 60 + int(minute)
+
+
 def _hash_password(password: str) -> str:
     if len(password or "") < 8:
         raise UserStoreError("password_too_short")
@@ -478,7 +484,7 @@ class UserStore:
             data = self._load_unlocked()
             now = self._alert_now()
             today = now.strftime("%Y-%m-%d")
-            current_time = now.strftime("%H:%M")
+            current_minutes = now.hour * 60 + now.minute
             due = []
 
             for user in data["users"].values():
@@ -502,7 +508,12 @@ class UserStore:
                         continue
 
                 if not force:
-                    if preferences.get("alert_time") != current_time:
+                    try:
+                        alert_minutes = _minutes_from_alert_time(preferences.get("alert_time", "08:00"))
+                    except UserStoreError:
+                        alert_minutes = _minutes_from_alert_time(DEFAULT_PREFERENCES["alert_time"])
+
+                    if current_minutes < alert_minutes:
                         continue
 
                     alert_state = user.get("alert_state") or {}
@@ -512,7 +523,14 @@ class UserStore:
                     except (TypeError, ValueError):
                         last_sent = 0
 
-                    if alert_state.get("last_sent_date") == today and last_sent > 0:
+                    last_channel = alert_state.get("last_channel")
+                    current_channel = preferences.get("notification_channel")
+
+                    if (
+                        alert_state.get("last_sent_date") == today
+                        and last_sent > 0
+                        and (not last_channel or last_channel == current_channel)
+                    ):
                         continue
 
                 due.append(deepcopy(user))
