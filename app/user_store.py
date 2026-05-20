@@ -336,6 +336,53 @@ class UserStore:
 
             return self._public_user(user)
 
+    def update_profile(
+        self,
+        user_id: str,
+        name: Optional[str] = None,
+        preferences: Optional[dict[str, Any]] = None,
+    ) -> dict[str, Any]:
+        with self.lock:
+            data = self._load_unlocked()
+            user = data["users"].get(user_id)
+
+            if not user:
+                raise UserStoreError("user_not_found")
+
+            if name is not None:
+                user["name"] = _normalize_name(str(name), user.get("email", ""))
+
+            if preferences is not None:
+                current = {
+                    **DEFAULT_PREFERENCES,
+                    **(user.get("preferences") or {}),
+                }
+
+                if "notification_channel" in preferences:
+                    channel = str(preferences["notification_channel"]).strip().lower()
+                    if channel not in VALID_CHANNELS:
+                        raise UserStoreError("notification_channel_invalid")
+                    current["notification_channel"] = channel
+
+                if "alert_time" in preferences:
+                    current["alert_time"] = _normalize_alert_time(str(preferences["alert_time"]))
+
+                if "theme" in preferences:
+                    theme = str(preferences["theme"]).strip().lower()
+                    if theme not in VALID_THEMES:
+                        raise UserStoreError("theme_invalid")
+                    current["theme"] = theme
+
+                if "sites" in preferences:
+                    current["sites"] = self._valid_sites(preferences["sites"])
+
+                user["preferences"] = current
+
+            user["updated_at"] = _iso_now()
+            self._save_unlocked(data)
+
+            return self._public_user(user)
+
     def save_push_subscription(
         self,
         user_id: str,

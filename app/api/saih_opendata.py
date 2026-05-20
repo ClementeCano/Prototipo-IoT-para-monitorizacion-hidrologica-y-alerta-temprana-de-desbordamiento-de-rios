@@ -1,5 +1,6 @@
 import os
 import time
+from datetime import date, timedelta
 from typing import Dict, Any, List
 
 import certifi
@@ -16,6 +17,7 @@ except Exception:
     pass
 
 URL = "https://www.saihebro.com/datos/apiopendata"
+HISTORY_REQUEST_DELAY_SECONDS = float(os.getenv("SAIH_HISTORY_REQUEST_DELAY_SECONDS", "0.1"))
 
 
 def _build_session() -> requests.Session:
@@ -121,3 +123,63 @@ def fetch_saih_signals(tags: List[str]) -> Dict[str, Dict[str, Any]]:
         }
 
     return out
+
+
+def _iter_days(start_date: date, end_date: date):
+    current = start_date
+
+    while current <= end_date:
+        yield current
+        current += timedelta(days=1)
+
+
+def _extract_signal_items(data: Any) -> list[dict[str, Any]]:
+    if isinstance(data, dict):
+        items = data.get("senales", [])
+    else:
+        items = data
+
+    if not isinstance(items, list):
+        raise RuntimeError(f"Formato SAIH inesperado: {type(data)}")
+
+    return [
+        item
+        for item in items
+        if isinstance(item, dict) and item.get("senal")
+    ]
+
+
+def fetch_saih_history(tags: List[str], start_date: date, end_date: date) -> list[dict[str, Any]]:
+    """
+    Descarga datos historicos de SAIH por dias completos.
+    La API de SAIH solo devuelve las 24 horas posteriores a cada fecha de inicio,
+    por eso se itera dia a dia.
+    """
+
+    apikey = os.getenv("SAIH_APIKEY", "")
+    if not apikey:
+        raise RuntimeError("Falta SAIH_APIKEY (en .env o variable de entorno).")
+
+    tags = [tag for tag in tags if tag]
+    if not tags:
+        return []
+
+    if start_date > end_date:
+        return []
+
+    records: list[dict[str, Any]] = []
+
+    for day in _iter_days(start_date, end_date):
+        params = {
+            "senal": ",".join(tags),
+            "inicio": day.isoformat(),
+            "apikey": apikey,
+        }
+
+        data = _safe_get(URL, params, timeout=(8, 30))
+        records.extend(_extract_signal_items(data))
+
+        if HISTORY_REQUEST_DELAY_SECONDS > 0:
+            time.sleep(HISTORY_REQUEST_DELAY_SECONDS)
+
+    return records

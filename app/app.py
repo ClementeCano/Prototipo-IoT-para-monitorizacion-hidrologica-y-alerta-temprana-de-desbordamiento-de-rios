@@ -1,7 +1,9 @@
 import base64
+from io import BytesIO
 import json
 import os
 import sys
+import unicodedata
 from dotenv import load_dotenv
 
 load_dotenv()
@@ -51,10 +53,11 @@ except Exception as e:
 
 
 from pathlib import Path
-from datetime import datetime
+from datetime import date, datetime, timedelta
 import asyncio
 from concurrent.futures import ProcessPoolExecutor
 from typing import Dict, Any, Set, Optional
+from zoneinfo import ZoneInfo
 
 import requests
 import pandas as pd
@@ -64,7 +67,7 @@ from fastapi.responses import FileResponse, HTMLResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 
 try:
-    from app.api.saih_opendata import fetch_saih_signals
+    from app.api.saih_opendata import fetch_saih_history, fetch_saih_signals
     from app.api.aemet_opendata import (
         fetch_aemet_municipio_horaria,
         extract_rain_forecast_mm,
@@ -75,7 +78,7 @@ try:
     from app import alertas
     from app.user_store import UserStore, UserStoreError
 except ImportError:
-    from api.saih_opendata import fetch_saih_signals
+    from api.saih_opendata import fetch_saih_history, fetch_saih_signals
     from api.aemet_opendata import (
         fetch_aemet_municipio_horaria,
         extract_rain_forecast_mm,
@@ -231,6 +234,7 @@ IA_WORKERS = int(os.getenv("IA_WORKERS", "1"))
 IA_PROCESS_POOL_ENABLED = os.getenv("IA_PROCESS_POOL_ENABLED", "1").lower() in {"1", "true", "yes"}
 IA_REFRESH_ON_WS = os.getenv("IA_REFRESH_ON_WS", "1").lower() in {"1", "true", "yes"}
 IA_EXECUTOR = ProcessPoolExecutor(max_workers=IA_WORKERS) if IA_PROCESS_POOL_ENABLED else None
+HISTORY_DOWNLOAD_MAX_DAYS = int(os.getenv("HISTORY_DOWNLOAD_MAX_DAYS", "366"))
 
 app = FastAPI()
 app.mount("/static", StaticFiles(directory=BASE_DIR), name="static")
@@ -302,6 +306,111 @@ def _filter_alert_sites(site_ids: Optional[str], allow_all: bool = False):
     ]
 
     return selected
+
+
+def _today_madrid() -> date:
+    try:
+        return datetime.now(ZoneInfo("Europe/Madrid")).date()
+    except Exception:
+        return date.today()
+
+
+def _parse_iso_date(value: str, field_name: str) -> date:
+    try:
+        return date.fromisoformat((value or "").strip())
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=f"{field_name}_invalid") from exc
+
+
+def _slugify_filename(value: str) -> str:
+    normalized = unicodedata.normalize("NFKD", value)
+    value = normalized.encode("ascii", "ignore").decode("ascii")
+    safe = []
+
+    for char in value.lower():
+        if char.isalnum():
+            safe.append(char)
+        elif char in {" ", "-", "_"}:
+            safe.append("_")
+
+    return "_".join("".join(safe).split("_")) or "historico"
+
+
+def _build_history_dataframe(
+    site: dict[str, Any],
+    variable: str,
+    granularity: str,
+    records: list[dict[str, Any]],
+) -> pd.DataFrame:
+    signal_to_column = {}
+
+    if variable in {"nivel", "both"}:
+        signal_to_column[(site.get("saih") or {}).get("nivel")] = "nivel_m"
+
+    if variable in {"caudal", "both"}:
+        signal_to_column[(site.get("saih") or {}).get("caudal")] = "caudal_m3s"
+
+    rows_by_date: dict[str, dict[str, Any]] = {}
+
+    for record in records:
+        signal = record.get("senal")
+        column = signal_to_column.get(signal)
+
+        if not column:
+            continue
+
+        timestamp = record.get("fecha")
+        if not timestamp:
+            continue
+
+        row = rows_by_date.setdefault(timestamp, {
+            "fecha": timestamp,
+            "municipio": site.get("name"),
+        })
+        row[column] = record.get("valor")
+
+    columns = ["fecha", "municipio"]
+
+    if variable in {"nivel", "both"}:
+        columns.append("nivel_m")
+
+    if variable in {"caudal", "both"}:
+        columns.append("caudal_m3s")
+
+    df = pd.DataFrame(rows_by_date.values())
+
+    if df.empty:
+        return pd.DataFrame(columns=columns)
+
+    df["fecha_dt"] = pd.to_datetime(df["fecha"], errors="coerce")
+    df = df.dropna(subset=["fecha_dt"]).sort_values("fecha_dt").reset_index(drop=True)
+
+    for column in columns:
+        if column not in df.columns:
+            df[column] = None
+
+    value_columns = [column for column in columns if column not in {"fecha", "municipio"}]
+    rule = "h" if granularity == "hourly" else "D"
+    date_format = "%Y-%m-%d %H:00:00" if granularity == "hourly" else "%Y-%m-%d"
+
+    grouped = (
+        df.set_index("fecha_dt")[value_columns]
+        .resample(rule)
+        .mean()
+        .dropna(how="all")
+        .reset_index()
+    )
+
+    if grouped.empty:
+        return pd.DataFrame(columns=columns)
+
+    grouped["fecha"] = grouped["fecha_dt"].dt.strftime(date_format)
+    grouped["municipio"] = site.get("name")
+
+    for column in value_columns:
+        grouped[column] = grouped[column].round(3)
+
+    return grouped[columns]
 
 
 # ---------------------------
@@ -386,6 +495,143 @@ def api_sites():
     ])
 
 
+@app.get("/api/history/download")
+async def api_history_download(
+    request: Request,
+    site_id: str,
+    start_date: str,
+    end_date: Optional[str] = None,
+    variable: str = "both",
+    granularity: str = "hourly",
+    file_format: str = "xlsx",
+):
+    _require_user(request)
+
+    site = SITES_BY_ID.get((site_id or "").strip())
+
+    if not site:
+        return JSONResponse({"ok": False, "error": "site_not_found"}, status_code=404)
+
+    variable = (variable or "").strip().lower()
+    if variable not in {"nivel", "caudal", "both"}:
+        return JSONResponse({"ok": False, "error": "variable_invalid"}, status_code=400)
+
+    granularity = (granularity or "").strip().lower()
+    if granularity not in {"hourly", "daily"}:
+        return JSONResponse({"ok": False, "error": "granularity_invalid"}, status_code=400)
+
+    file_format = (file_format or "").strip().lower()
+    if file_format == "excel":
+        file_format = "xlsx"
+
+    if file_format not in {"csv", "xlsx"}:
+        return JSONResponse({"ok": False, "error": "format_invalid"}, status_code=400)
+
+    max_end_date = _today_madrid() - timedelta(days=1)
+    range_start = _parse_iso_date(start_date, "start_date")
+    range_end = _parse_iso_date(end_date, "end_date") if end_date else max_end_date
+
+    if range_start > range_end:
+        return JSONResponse(
+            {
+                "ok": False,
+                "error": "date_range_invalid",
+                "message": "La fecha desde no puede ser posterior a la fecha hasta.",
+            },
+            status_code=400,
+        )
+
+    if range_end > max_end_date:
+        return JSONResponse(
+            {
+                "ok": False,
+                "error": "end_date_in_future",
+                "message": "La fecha hasta debe ser, como máximo, el día anterior a hoy.",
+            },
+            status_code=400,
+        )
+
+    days_count = (range_end - range_start).days + 1
+
+    if days_count > HISTORY_DOWNLOAD_MAX_DAYS:
+        return JSONResponse(
+            {
+                "ok": False,
+                "error": "date_range_too_large",
+                "message": f"El rango maximo permitido es de {HISTORY_DOWNLOAD_MAX_DAYS} dias.",
+            },
+            status_code=400,
+        )
+
+    tags = []
+    saih_config = site.get("saih") or {}
+
+    if variable in {"nivel", "both"}:
+        tags.append(saih_config.get("nivel"))
+
+    if variable in {"caudal", "both"}:
+        tags.append(saih_config.get("caudal"))
+
+    tags = [tag for tag in tags if tag]
+
+    if not tags:
+        return JSONResponse({"ok": False, "error": "site_without_requested_signals"}, status_code=400)
+
+    try:
+        records = await asyncio.to_thread(fetch_saih_history, tags, range_start, range_end)
+    except Exception as e:
+        print("[SAIH HISTORY ERROR]", repr(e))
+        return JSONResponse(
+            {
+                "ok": False,
+                "error": "saih_history_error",
+                "message": str(e),
+            },
+            status_code=502,
+        )
+
+    df = _build_history_dataframe(site, variable, granularity, records)
+
+    if df.empty:
+        return JSONResponse(
+            {
+                "ok": False,
+                "error": "history_without_data",
+                "message": "SAIH no ha devuelto datos para ese rango.",
+            },
+            status_code=404,
+        )
+
+    base_filename = (
+        f"historico_{_slugify_filename(site.get('name', site_id))}_"
+        f"{variable}_{granularity}_{range_start.isoformat()}_{range_end.isoformat()}"
+    )
+
+    if file_format == "csv":
+        content = df.to_csv(index=False, encoding="utf-8-sig").encode("utf-8-sig")
+        media_type = "text/csv; charset=utf-8"
+        filename = f"{base_filename}.csv"
+    else:
+        buffer = BytesIO()
+        with pd.ExcelWriter(buffer, engine="openpyxl") as writer:
+            df.to_excel(writer, index=False, sheet_name="Historico")
+        content = buffer.getvalue()
+        media_type = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+        filename = f"{base_filename}.xlsx"
+
+    return Response(
+        content=content,
+        media_type=media_type,
+        headers={
+            "Content-Disposition": f'attachment; filename="{filename}"',
+            "X-History-Start-Date": range_start.isoformat(),
+            "X-History-End-Date": range_end.isoformat(),
+            "X-History-Granularity": granularity,
+            "X-History-Rows": str(len(df)),
+        },
+    )
+
+
 @app.get("/health")
 def health():
     return {"ok": True}
@@ -449,6 +695,25 @@ async def api_update_preferences(data: dict, request: Request):
 
     try:
         public_user = user_store.update_preferences(user["id"], data)
+        return {"ok": True, "user": public_user}
+    except UserStoreError as e:
+        return JSONResponse({"ok": False, "error": str(e)}, status_code=400)
+
+
+@app.put("/api/users/profile")
+async def api_update_profile(data: dict, request: Request):
+    user = _require_user(request)
+    preferences = data.get("preferences")
+
+    if preferences is not None and not isinstance(preferences, dict):
+        return JSONResponse({"ok": False, "error": "preferences_invalid"}, status_code=400)
+
+    try:
+        public_user = user_store.update_profile(
+            user["id"],
+            name=data.get("name"),
+            preferences=preferences,
+        )
         return {"ok": True, "user": public_user}
     except UserStoreError as e:
         return JSONResponse({"ok": False, "error": str(e)}, status_code=400)
@@ -563,7 +828,9 @@ async def save_token(data: dict, request: Request):
 
 
 @app.post("/api/test-token")
-async def test_token(data: dict):
+async def test_token(data: dict, request: Request):
+    _require_user(request)
+
     token = (data.get("token") or "").strip()
 
     if not token:
