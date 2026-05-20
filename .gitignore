@@ -17,3 +17,7 @@ Thumbs.db
 
 # 🔧 Logs
 *.log
+
+# Datos locales de usuarios
+app/users.json
+app/users.json.tmp

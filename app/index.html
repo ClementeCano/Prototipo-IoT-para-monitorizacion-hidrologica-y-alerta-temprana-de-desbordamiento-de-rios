@@ -13,6 +13,9 @@
 
   <script src="https://www.gstatic.com/firebasejs/10.12.2/firebase-app-compat.js"></script>
   <script src="https://www.gstatic.com/firebasejs/10.12.2/firebase-messaging-compat.js"></script>
+  <script>
+    document.documentElement.dataset.theme = localStorage.getItem("dashboardTheme") || "dark";
+  </script>
 <style>
   :root{
     --bg0:#05070d;
@@ -34,6 +37,21 @@
     --r: 18px;
     --r2: 22px;
     --shadow: 0 18px 60px rgba(0,0,0,.55);
+  }
+
+  html[data-theme="light"] body{
+    --bg0:#f6f8fb;
+    --bg1:#edf3f8;
+    --glass: rgba(255,255,255,.76);
+    --glass2: rgba(255,255,255,.92);
+    --stroke: rgba(15,23,42,.13);
+    --text: rgba(15,23,42,.92);
+    --muted: rgba(51,65,85,.72);
+    --muted2: rgba(71,85,105,.62);
+    --shadow: 0 18px 45px rgba(15,23,42,.14);
+    color: var(--text);
+    background:
+      linear-gradient(180deg, var(--bg0) 0%, var(--bg1) 70%, #e6edf4 100%);
   }
 
   *{ box-sizing:border-box; }
@@ -150,6 +168,27 @@
     padding-right: 16px;
   }
   option{ background: #0b1020; color: var(--text); }
+  html[data-theme="light"] option{ background: #ffffff; color: #0f172a; }
+
+  input{
+    width:100%;
+    background: rgba(255,255,255,.06);
+    color: var(--text);
+    border: 1px solid var(--stroke);
+    border-radius: 10px;
+    padding: 10px 12px;
+    outline: none;
+    font: inherit;
+  }
+
+  input:focus{
+    border-color: rgba(6,182,212,.55);
+    box-shadow: 0 0 0 3px rgba(6,182,212,.16);
+  }
+
+  html[data-theme="light"] input{
+    background: rgba(255,255,255,.88);
+  }
 
   .kpi{
     display:grid;
@@ -184,6 +223,12 @@
     -webkit-background-clip: text;
     background-clip: text;
     color: transparent;
+  }
+
+  html[data-theme="light"] .big{
+    background: linear-gradient(90deg, rgba(15,23,42,.96), rgba(51,65,85,.78));
+    -webkit-background-clip: text;
+    background-clip: text;
   }
 
   .dot{
@@ -330,6 +375,92 @@
     transform: scale(1.05);
   }
 
+  .alert-btn.secondary{
+    background: rgba(255,255,255,.08);
+    border: 1px solid var(--stroke);
+    box-shadow: none;
+  }
+
+  html[data-theme="light"] .alert-btn.secondary{
+    background: rgba(15,23,42,.06);
+    color: #0f172a;
+  }
+
+  .settings-panel{
+    margin: 0 0 16px 0;
+  }
+
+  .settings-grid{
+    display:grid;
+    grid-template-columns: 1fr;
+    gap: 12px;
+    margin-top: 12px;
+  }
+
+  @media (min-width: 780px){
+    .settings-grid{
+      grid-template-columns: repeat(4, minmax(0, 1fr));
+    }
+  }
+
+  .field{
+    display:flex;
+    flex-direction:column;
+    gap: 7px;
+    min-width: 0;
+  }
+
+  .field label,
+  .field > span{
+    color: var(--muted2);
+    font-size: 12px;
+    text-transform: uppercase;
+    letter-spacing: .10em;
+  }
+
+  .field select{
+    width:100%;
+    border: 1px solid var(--stroke);
+    border-radius: 10px;
+    padding: 10px 12px;
+    background: rgba(255,255,255,.06);
+  }
+
+  html[data-theme="light"] .field select{
+    background: rgba(255,255,255,.88);
+  }
+
+  .site-grid{
+    display:grid;
+    grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+    gap: 8px;
+    margin: 12px 0;
+  }
+
+  .site-check{
+    display:flex;
+    align-items:center;
+    gap: 8px;
+    min-height: 38px;
+    padding: 8px 10px;
+    border: 1px solid var(--stroke);
+    border-radius: 10px;
+    background: rgba(255,255,255,.04);
+    color: var(--text);
+    cursor:pointer;
+  }
+
+  .site-check input{
+    width: 16px;
+    height: 16px;
+    padding: 0;
+  }
+
+  .auth-card{
+    min-width: min(100%, 320px);
+    flex: 1;
+  }
+
   /* 🔥 KPIs MÁS GRANDES */
   .big{
     font-size:56px;
@@ -367,30 +498,130 @@
       </div>
     </div>
 
-    <button onclick="toggleAlerts()" class="alert-btn" id ="alertBtn">
-      🔔 Activar alertas
-    </button>
+    <div class="row">
+      <button onclick="toggleUserPanel()" class="alert-btn secondary" id="userBtn">
+        Usuario
+      </button>
+      <button onclick="toggleAlerts()" class="alert-btn" id ="alertBtn">
+        🔔 Activar alertas
+      </button>
+    </div>
+  </div>
+
+  <div id="userPanel" class="card settings-panel" style="display:none;">
+    <div class="row" style="justify-content: space-between;">
+      <h3 class="sectiontitle">Cuenta de usuario</h3>
+      <span class="pill" id="sessionState">Sin sesión</span>
+    </div>
+
+    <div id="authLoggedOut" class="row" style="align-items:flex-start;">
+      <div class="auth-card">
+        <h3 class="sectiontitle">Entrar</h3>
+        <div class="settings-grid" style="grid-template-columns:1fr;">
+          <div class="field">
+            <span>Email</span>
+            <input id="loginEmail" type="email" autocomplete="email">
+          </div>
+          <div class="field">
+            <span>Contraseña</span>
+            <input id="loginPassword" type="password" autocomplete="current-password">
+          </div>
+          <button onclick="loginUser()" class="alert-btn active">Entrar</button>
+        </div>
+      </div>
+
+      <div class="auth-card">
+        <h3 class="sectiontitle">Crear cuenta</h3>
+        <div class="settings-grid" style="grid-template-columns:1fr;">
+          <div class="field">
+            <span>Nombre</span>
+            <input id="registerName" type="text" autocomplete="name">
+          </div>
+          <div class="field">
+            <span>Email</span>
+            <input id="registerEmail" type="email" autocomplete="email">
+          </div>
+          <div class="field">
+            <span>Contraseña</span>
+            <input id="registerPassword" type="password" autocomplete="new-password">
+          </div>
+          <button onclick="registerUser()" class="alert-btn">Crear cuenta</button>
+        </div>
+      </div>
+    </div>
+
+    <div id="authLoggedIn" style="display:none;">
+      <div class="row" style="justify-content: space-between;">
+        <div>
+          <div class="label">Sesión iniciada</div>
+          <div id="userSummary" class="muted" style="margin-bottom:0;">-</div>
+        </div>
+        <button onclick="logoutUser()" class="alert-btn secondary">Salir</button>
+      </div>
+    </div>
   </div>
 
   <div id="alertsPanel" style="display:none; margin-top:12px;">
+    <div class="card settings-panel">
+      <div class="row" style="justify-content: space-between;">
+        <h3 class="sectiontitle">Preferencias de alertas</h3>
+        <span class="pill" id="alertProfileState">Inicia sesión para guardar</span>
+      </div>
 
-    <div id="alertsSites"></div>
+      <div id="alertsAuthNotice" class="muted">
+        Entra o crea una cuenta para guardar tus municipios, la hora diaria, el canal y el tema.
+      </div>
 
-    <button onclick="saveAlerts()" class="alert-btn active">
-      💾 Guardar alertas
-    </button>
+      <div id="alertsControls" style="display:none;">
+        <div class="settings-grid">
+          <div class="field">
+            <span>Canal</span>
+            <select id="prefChannel">
+              <option value="push">Push</option>
+              <option value="email">Correo</option>
+            </select>
+          </div>
+          <div class="field">
+            <span>Hora diaria</span>
+            <input id="prefAlertTime" type="time" step="60">
+          </div>
+          <div class="field">
+            <span>Tema</span>
+            <select id="prefTheme">
+              <option value="dark">Oscuro</option>
+              <option value="light">Claro</option>
+            </select>
+          </div>
+          <div class="field">
+            <span>Email</span>
+            <input id="prefEmail" type="email" readonly>
+          </div>
+        </div>
 
-    <button onclick="testCurrentDevicePush()" class="alert-btn" style="margin-left:8px;">
-      Probar este dispositivo
-    </button>
+        <div id="emailConfigNotice" class="err"></div>
 
-    <button onclick="testSelectedAlertsOnCurrentDevice()" class="alert-btn" style="margin-left:8px;">
-      Probar municipios seleccionados
-    </button>
+        <div class="label" style="margin-top:14px;">Municipios</div>
+        <div id="alertsSites" class="site-grid"></div>
+      </div>
 
-    <button onclick="removeCurrentDeviceAlerts()" class="alert-btn" style="margin-left:8px;">
-      Quitar este dispositivo
-    </button>
+      <div class="row">
+        <button onclick="saveAlerts()" class="alert-btn active">
+          💾 Guardar alertas
+        </button>
+
+        <button onclick="testCurrentDevicePush()" class="alert-btn">
+          Probar canal
+        </button>
+
+        <button onclick="testSelectedAlertsOnCurrentDevice()" class="alert-btn">
+          Probar municipios
+        </button>
+
+        <button onclick="removeCurrentDeviceAlerts()" class="alert-btn secondary">
+          Quitar alertas
+        </button>
+      </div>
+    </div>
 
   </div>
 
@@ -676,6 +907,24 @@
     let firebaseToken = null;
     let notificationsInitialized = null;
     let lastFirebaseError = null;
+    let currentUser = null;
+    let lastPredData = null;
+    let emailConfig = null;
+
+    const userPanel = document.getElementById("userPanel");
+    const userBtn = document.getElementById("userBtn");
+    const sessionState = document.getElementById("sessionState");
+    const authLoggedOut = document.getElementById("authLoggedOut");
+    const authLoggedIn = document.getElementById("authLoggedIn");
+    const userSummary = document.getElementById("userSummary");
+    const alertsAuthNotice = document.getElementById("alertsAuthNotice");
+    const alertsControls = document.getElementById("alertsControls");
+    const alertProfileState = document.getElementById("alertProfileState");
+    const prefChannel = document.getElementById("prefChannel");
+    const prefAlertTime = document.getElementById("prefAlertTime");
+    const prefTheme = document.getElementById("prefTheme");
+    const prefEmail = document.getElementById("prefEmail");
+    const emailConfigNotice = document.getElementById("emailConfigNotice");
 
     async function getFirebaseMessagingSupported() {
       try {
@@ -720,6 +969,212 @@
       return Array.from(
         document.querySelectorAll("#alertsSites input:checked")
       ).map(x => x.value);
+    }
+
+    function getChartTextColor() {
+      return document.documentElement.dataset.theme === "light"
+        ? "rgba(15,23,42,.82)"
+        : "white";
+    }
+
+    function applyTheme(theme) {
+      const normalized = theme === "light" ? "light" : "dark";
+      document.documentElement.dataset.theme = normalized;
+      localStorage.setItem("dashboardTheme", normalized);
+      document.querySelector("meta[name='theme-color']")
+        ?.setAttribute("content", normalized === "light" ? "#f6f8fb" : "#05070d");
+
+      if (prefTheme) {
+        prefTheme.value = normalized;
+      }
+
+      if (lastPredData) {
+        updatePredChart(lastPredData);
+      }
+    }
+
+    function getUserPreferences() {
+      return currentUser?.preferences || {
+        notification_channel: "push",
+        alert_time: "08:00",
+        theme: localStorage.getItem("dashboardTheme") || "dark",
+        sites: []
+      };
+    }
+
+    function setSelectedAlertSites(siteIds) {
+      const selected = new Set(Array.isArray(siteIds) ? siteIds : []);
+
+      document
+        .querySelectorAll("#alertsSites input")
+        .forEach(input => {
+          input.checked = selected.has(input.value);
+        });
+    }
+
+    function collectPreferencesFromUi() {
+      return {
+        notification_channel: prefChannel.value,
+        alert_time: prefAlertTime.value || "08:00",
+        theme: prefTheme.value || "dark",
+        sites: getSelectedAlertSites()
+      };
+    }
+
+    function updateAuthUI() {
+      const logged = Boolean(currentUser);
+      authLoggedOut.style.display = logged ? "none" : "flex";
+      authLoggedIn.style.display = logged ? "block" : "none";
+      alertsAuthNotice.style.display = logged ? "none" : "block";
+      alertsControls.style.display = logged ? "block" : "none";
+
+      sessionState.textContent = logged ? "Sesión activa" : "Sin sesión";
+      alertProfileState.textContent = logged ? "Preferencias sincronizadas" : "Inicia sesión para guardar";
+      userBtn.textContent = logged ? (currentUser.name || "Usuario") : "Usuario";
+
+      if (!logged) {
+        return;
+      }
+
+      const preferences = getUserPreferences();
+      userSummary.textContent = `${currentUser.name} · ${currentUser.email}`;
+      prefEmail.value = currentUser.email || "";
+      prefChannel.value = preferences.notification_channel || "push";
+      prefAlertTime.value = preferences.alert_time || "08:00";
+      prefTheme.value = preferences.theme || "dark";
+      applyTheme(preferences.theme || "dark");
+      setSelectedAlertSites(preferences.sites || []);
+      updateEmailConfigNotice();
+    }
+
+    function updateEmailConfigNotice() {
+      if (!emailConfigNotice || !prefChannel) {
+        return;
+      }
+
+      const showNotice =
+        prefChannel.value === "email" &&
+        emailConfig &&
+        emailConfig.smtp &&
+        !emailConfig.smtp.configured;
+
+      if (!showNotice) {
+        emailConfigNotice.style.display = "none";
+        emailConfigNotice.textContent = "";
+        return;
+      }
+
+      emailConfigNotice.style.display = "block";
+      emailConfigNotice.textContent = emailConfig.message;
+    }
+
+    async function apiJson(url, options = {}) {
+      const res = await fetch(url, {
+        ...options,
+        headers: {
+          "Content-Type": "application/json",
+          ...(options.headers || {})
+        }
+      });
+      const data = await res.json().catch(() => ({}));
+
+      if (!res.ok || data.ok === false) {
+        throw new Error(data.error || data.detail || `HTTP ${res.status}`);
+      }
+
+      return data;
+    }
+
+    async function loadCurrentUser() {
+      try {
+        const data = await apiJson("/api/users/me");
+        currentUser = data.authenticated ? data.user : null;
+        updateAuthUI();
+      } catch (err) {
+        console.warn("No se pudo cargar usuario", err);
+        currentUser = null;
+        updateAuthUI();
+      }
+    }
+
+    async function loadEmailConfig() {
+      try {
+        emailConfig = await apiJson("/api/email/config");
+      } catch (err) {
+        emailConfig = {
+          smtp: { configured: false },
+          message: "No se pudo comprobar la configuración SMTP del servidor."
+        };
+      }
+
+      updateEmailConfigNotice();
+    }
+
+    async function registerUser() {
+      try {
+        const data = await apiJson("/api/users/register", {
+          method: "POST",
+          body: JSON.stringify({
+            name: document.getElementById("registerName").value,
+            email: document.getElementById("registerEmail").value,
+            password: document.getElementById("registerPassword").value
+          })
+        });
+        currentUser = data.user;
+        updateAuthUI();
+        document.getElementById("alertsPanel").style.display = "block";
+        alert("Cuenta creada");
+      } catch (err) {
+        alert(`No se pudo crear la cuenta: ${err.message}`);
+      }
+    }
+
+    async function loginUser() {
+      try {
+        const data = await apiJson("/api/users/login", {
+          method: "POST",
+          body: JSON.stringify({
+            email: document.getElementById("loginEmail").value,
+            password: document.getElementById("loginPassword").value
+          })
+        });
+        currentUser = data.user;
+        updateAuthUI();
+        document.getElementById("alertsPanel").style.display = "block";
+      } catch (err) {
+        alert("Email o contraseña incorrectos");
+      }
+    }
+
+    async function logoutUser() {
+      try {
+        await apiJson("/api/users/logout", { method: "POST", body: "{}" });
+      } catch (err) {
+        console.warn("No se pudo cerrar sesión", err);
+      }
+
+      currentUser = null;
+      firebaseToken = null;
+      updateAuthUI();
+    }
+
+    async function savePreferencesToServer() {
+      if (!currentUser) {
+        userPanel.style.display = "block";
+        throw new Error("auth_required");
+      }
+
+      const data = await apiJson("/api/users/preferences", {
+        method: "PUT",
+        body: JSON.stringify(collectPreferencesFromUi())
+      });
+      currentUser = data.user;
+      updateAuthUI();
+      return currentUser;
+    }
+
+    function toggleUserPanel() {
+      userPanel.style.display = userPanel.style.display === "none" ? "block" : "none";
     }
 
     function setConn(isUp) {
@@ -880,6 +1335,7 @@
     }
 
     function updatePredChart(pred) {
+      lastPredData = pred;
       const canvas = document.getElementById("predChart");
       if (!canvas) return;
 
@@ -912,6 +1368,8 @@
 
       if (predChart) predChart.destroy();
 
+      const chartTextColor = getChartTextColor();
+
       predChart = new Chart(canvas, {
         type: "line",
         data: {
@@ -943,7 +1401,7 @@
 
           plugins: {
             legend: {
-              labels: { color: "white" }
+              labels: { color: chartTextColor }
             }
           },
 
@@ -954,13 +1412,13 @@
               min: 0,
               max: Math.ceil(maxNivel + 0.5),
               ticks: {
-                color: "white",
+                color: chartTextColor,
                 callback: v => v.toFixed(1)
               },
               title: {
                 display: true,
                 text: "Nivel (m)",
-                color: "white"
+                color: chartTextColor
               }
             },
 
@@ -970,14 +1428,14 @@
               min: 0,
               max: Math.ceil(maxCaudal * 1.2),
               ticks: {
-                color: "white",
+                color: chartTextColor,
                 callback: v => Math.round(v)
               },
               grid: { drawOnChartArea: false },
               title: {
                 display: true,
                 text: "Caudal (m³/s)",
-                color: "white"
+                color: chartTextColor
               }
             }
           }
@@ -1067,7 +1525,7 @@
       const alertsDiv = document.getElementById("alertsSites");
 
       alertsDiv.innerHTML = sites.map(s => `
-        <label style="display:block; margin-bottom:8px;">
+        <label class="site-check">
           <input type="checkbox" value="${s.id}">
           ${s.name}
         </label>
@@ -1076,7 +1534,7 @@
       // =========================
       // RESTAURAR MUNICIPIOS
       // =========================
-      const savedSites = JSON.parse(
+      const savedSites = currentUser?.preferences?.sites || JSON.parse(
         localStorage.getItem("alertSites") || "[]"
       );
 
@@ -1289,6 +1747,16 @@
 
 
     const sitesReady = loadSites();
+    const currentUserReady = loadCurrentUser();
+    const emailConfigReady = loadEmailConfig();
+
+    prefTheme.addEventListener("change", () => applyTheme(prefTheme.value));
+    prefChannel.addEventListener("change", () => {
+      alertProfileState.textContent = prefChannel.value === "email"
+        ? "Las alertas llegarán por correo"
+        : "Las alertas llegarán por push";
+      updateEmailConfigNotice();
+    });
     
     async function initNotifications({ allowPrompt = true } = {}) {
 
@@ -1459,6 +1927,11 @@
         await sitesReady;
         await logPushDebug("subscription_start", { allowPrompt, requireSites });
 
+        if (!currentUser) {
+          userPanel.style.display = "block";
+          throw new Error("auth_required");
+        }
+
         if (!firebaseToken) {
 
           const token = await initNotifications({ allowPrompt });
@@ -1535,6 +2008,11 @@
           throw new Error(data.error || `HTTP ${res.status}`);
         }
 
+        if (data.user) {
+          currentUser = data.user;
+          updateAuthUI();
+        }
+
         console.log("✅ Suscripciones guardadas:", data);
 
       } catch (err) {
@@ -1552,6 +2030,10 @@
 
       const btn = document.getElementById("alertBtn");
       const panel = document.getElementById("alertsPanel");
+
+      if (!currentUser) {
+        userPanel.style.display = "block";
+      }
 
       // =========================
       // MOSTRAR PANEL
@@ -1602,141 +2084,108 @@
         document.getElementById("alertsPanel").style.display = "none";
       }
 
-      // =========================
-      // RESTAURAR SUSCRIPCIONES
-      // =========================
-      const savedSites = JSON.parse(
-        localStorage.getItem("alertSites") || "[]"
-      );
+      Promise.all([sitesReady, currentUserReady]).then(() => {
+        const preferences = getUserPreferences();
 
-      if (savedSites.length > 0) {
-
-        sitesReady
-          .then(() => initNotifications({ allowPrompt: false }))
-          .then((token) => {
+        if (
+          currentUser &&
+          preferences.notification_channel === "push" &&
+          Array.isArray(preferences.sites) &&
+          preferences.sites.length > 0
+        ) {
+          initNotifications({ allowPrompt: false }).then((token) => {
             if (token) {
               return enviarSuscripciones({ allowPrompt: false, requireSites: true });
             }
           });
-      }
+        }
+      });
     });
 
-  async function testCurrentDevicePush() {
+  window.sendSelectedAlertsTest = async function() {
+    const selectedSites = getSelectedAlertSites();
 
-    try {
-
-      const token = await initNotifications({ allowPrompt: true });
-
-      if (!token) {
-        alert("No se ha podido generar token en este dispositivo");
-        return;
-      }
-
-      await logPushDebug("test_current_device_start", {
-        tokenPrefix: token.slice(0, 15)
-      });
-
-      const res = await fetch("/api/test-token", {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json"
-        },
-        body: JSON.stringify({
-          token,
-          userAgent: navigator.userAgent,
-          platform: navigator.platform || null
-        })
-      });
-
-      const data = await res.json();
-
-      await logPushDebug("test_current_device_response", {
-        tokenPrefix: token.slice(0, 15),
-        responseStatus: res.status,
-        responseOk: res.ok,
-        sent: data?.sent
-      });
-
-      if (!res.ok || !data.ok || !data.sent) {
-        throw new Error(data.error || "La prueba no se ha enviado");
-      }
-
-      alert("Prueba enviada a este dispositivo");
-
-    } catch (err) {
-
-      console.error("Error probando este dispositivo:", err);
-      alert("Error enviando prueba a este dispositivo");
+    if (!currentUser) {
+      userPanel.style.display = "block";
+      throw new Error("auth_required");
     }
-  }
 
-  async function testSelectedAlertsOnCurrentDevice() {
+    if (selectedSites.length === 0) {
+      throw new Error("Selecciona al menos un municipio");
+    }
 
-    try {
+    await savePreferencesToServer();
 
-      const selectedSites = getSelectedAlertSites();
+    const preferences = getUserPreferences();
+    let token = null;
 
-      if (selectedSites.length === 0) {
-        alert("Selecciona al menos un municipio");
-        return;
+    if (preferences.notification_channel === "email") {
+      if (emailConfig && emailConfig.smtp && !emailConfig.smtp.configured) {
+        throw new Error(emailConfig.message);
       }
-
-      const token = await initNotifications({ allowPrompt: true });
+    } else {
+      token = await initNotifications({ allowPrompt: true });
 
       if (!token) {
-        alert("No se ha podido generar token en este dispositivo");
-        return;
+        throw new Error("No se ha podido generar token en este dispositivo");
       }
+    }
 
-      await logPushDebug("test_selected_alerts_start", {
-        tokenPrefix: token.slice(0, 15),
-        selectedSites
-      });
+    await logPushDebug("test_selected_alerts_start", {
+      tokenPrefix: token ? token.slice(0, 15) : null,
+      selectedSites,
+      channel: preferences.notification_channel
+    });
 
-      const res = await fetch("/api/test-selected-alerts", {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json"
-        },
-        body: JSON.stringify({
-          token,
-          sites: selectedSites,
-          userAgent: navigator.userAgent,
-          platform: navigator.platform || null
-        })
-      });
+    const data = await apiJson("/api/test-selected-alerts", {
+      method: "POST",
+      body: JSON.stringify({
+        token,
+        sites: selectedSites,
+        userAgent: navigator.userAgent,
+        platform: navigator.platform || null
+      })
+    });
 
-      const data = await res.json();
+    await logPushDebug("test_selected_alerts_response", {
+      tokenPrefix: token ? token.slice(0, 15) : null,
+      sent: data?.sent,
+      selectedSites: data?.sites || selectedSites,
+      channel: data?.channel
+    });
 
-      await logPushDebug("test_selected_alerts_response", {
-        tokenPrefix: token.slice(0, 15),
-        responseStatus: res.status,
-        responseOk: res.ok,
-        sent: data?.sent,
-        selectedSites: data?.sites || selectedSites
-      });
+    if (!data.sent && data.errors?.length) {
+      throw new Error(data.errors.join("\n"));
+    }
 
-      if (!res.ok || !data.ok) {
-        throw new Error(data.error || "La prueba no se ha enviado");
-      }
+    return data;
+  };
 
+  window.testCurrentDevicePush = async function() {
+    try {
+      const data = await window.sendSelectedAlertsTest();
+      alert(data.channel === "email" ? "Email de prueba enviado" : "Push de prueba enviado");
+    } catch (err) {
+      console.error("Error probando canal:", err);
+      alert(err.message || "Error probando canal");
+    }
+  };
+
+  window.testSelectedAlertsOnCurrentDevice = async function() {
+    try {
+      const data = await window.sendSelectedAlertsTest();
       alert(`Prueba enviada a ${data.processed_sites} municipios seleccionados`);
-
     } catch (err) {
-
       console.error("Error probando municipios seleccionados:", err);
-      alert("Error probando municipios seleccionados");
+      alert(err.message || "Error probando municipios seleccionados");
     }
-  }
+  };
 
-  async function removeCurrentDeviceAlerts() {
-
+  window.removeCurrentDeviceAlerts = async function() {
     try {
-
-      const token = await initNotifications({ allowPrompt: true });
-
-      if (!token) {
-        alert("No se ha podido generar token en este dispositivo");
+      if (!currentUser) {
+        userPanel.style.display = "block";
+        alert("Inicia sesión para modificar tus alertas");
         return;
       }
 
@@ -1746,80 +2195,69 @@
           input.checked = false;
         });
 
-      firebaseToken = token;
+      if (prefChannel.value === "push") {
+        const token = await initNotifications({ allowPrompt: true });
 
-      await enviarSuscripciones({ allowPrompt: true, requireSites: false });
+        if (token) {
+          firebaseToken = token;
+          await enviarSuscripciones({ allowPrompt: true, requireSites: false });
+        }
+      }
+
+      await savePreferencesToServer();
 
       localStorage.setItem("alertSites", "[]");
       localStorage.setItem("alerts", "off");
 
       const btn = document.getElementById("alertBtn");
       btn.classList.remove("active");
-      btn.textContent = "ðŸ”” Activar alertas";
+      btn.textContent = "🔔 Activar alertas";
 
-      alert("Este dispositivo se ha quitado de las alertas");
+      alert("Alertas desactivadas");
 
     } catch (err) {
-
       console.error("Error quitando alertas:", err);
-      alert("Error quitando este dispositivo de las alertas");
+      alert("Error quitando alertas");
     }
-  }
+  };
 
-  async function saveAlerts() {
-
+  window.saveAlerts = async function() {
     try {
-
-      // =========================
-      // GUARDAR ALERTAS
-      // =========================
-      const selectedSitesBefore = getSelectedAlertSites();
-
-      if (selectedSitesBefore.length === 0) {
-
-        alert("Selecciona al menos un municipio");
-
+      if (!currentUser) {
+        userPanel.style.display = "block";
+        alert("Inicia sesión para guardar tus alertas");
         return;
       }
-      await enviarSuscripciones({ allowPrompt: true, requireSites: true });
 
-      // =========================
-      // OCULTAR PANEL
-      // =========================
-      document.getElementById("alertsPanel").style.display = "none";
-
-      // =========================
-      // GUARDAR MUNICIPIOS
-      // =========================
       const selectedSites = getSelectedAlertSites();
 
-      localStorage.setItem(
-        "alertSites",
-        JSON.stringify(selectedSites)
-      );
+      if (selectedSites.length === 0) {
+        alert("Selecciona al menos un municipio");
+        return;
+      }
 
-      // =========================
-      // ACTUALIZAR BOTÓN
-      // =========================
+      await savePreferencesToServer();
+
+      if (prefChannel.value === "push") {
+        await enviarSuscripciones({ allowPrompt: true, requireSites: true });
+      }
+
+      document.getElementById("alertsPanel").style.display = "none";
+
+      localStorage.setItem("alertSites", JSON.stringify(selectedSites));
+      localStorage.setItem("alerts", "on");
+
       const btn = document.getElementById("alertBtn");
-
       btn.classList.add("active");
       btn.textContent = "✅ Alertas configuradas";
-
-      // =========================
-      // GUARDAR ESTADO
-      // =========================
-      localStorage.setItem("alerts", "on");
 
       alert("✅ Alertas guardadas correctamente");
 
     } catch (err) {
-
       console.error(err);
-
-      alert("❌ Error guardando alertas");
+      alert(err.message === "auth_required" ? "Inicia sesión para guardar" : "❌ Error guardando alertas");
     }
-  }
+  };
 
   </script>
 

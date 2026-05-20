@@ -16,7 +16,9 @@ from sklearn.metrics import (
     f1_score
 )
 
-from app.umbrales import cargar_umbrales
+# from app.umbrales import cargar_umbrales
+from umbrales import cargar_umbrales
+
 
 # =========================
 # CONFIG

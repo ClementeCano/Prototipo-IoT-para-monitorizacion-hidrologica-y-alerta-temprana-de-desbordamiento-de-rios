@@ -1,10 +1,17 @@
 import base64
 import json
 import os
+import sys
 from dotenv import load_dotenv
 
 load_dotenv()
 import traceback
+
+for stream in (sys.stdout, sys.stderr):
+    try:
+        stream.reconfigure(encoding="utf-8")
+    except Exception:
+        pass
 
 import firebase_admin
 from firebase_admin import credentials, messaging
@@ -51,31 +58,33 @@ from typing import Dict, Any, Set, Optional
 
 import requests
 import pandas as pd
-from fastapi import FastAPI, Response, WebSocket, WebSocketDisconnect
+from fastapi import FastAPI, HTTPException, Request, Response, WebSocket, WebSocketDisconnect
 from fastapi.responses import FileResponse, HTMLResponse, JSONResponse
 
-from app.api.saih_opendata import fetch_saih_signals
-from app.api.aemet_opendata import (
-    fetch_aemet_municipio_horaria,
-    extract_rain_forecast_mm,
-    extract_prob_precip_summary,
-)
-
-from app.prediccion_individual import predecir_semana_municipio
-from app.core.config import SITES, collect_all_tags
-
-# from api.saih_opendata import fetch_saih_signals
-# from api.aemet_opendata import (
-#     fetch_aemet_municipio_horaria,
-#     extract_rain_forecast_mm,
-#     extract_prob_precip_summary,
-# )
-
-# from prediccion_individual import predecir_semana_municipio
-# from core.config import SITES, collect_all_tags
-
 from fastapi.staticfiles import StaticFiles
-from app import alertas
+
+try:
+    from app.api.saih_opendata import fetch_saih_signals
+    from app.api.aemet_opendata import (
+        fetch_aemet_municipio_horaria,
+        extract_rain_forecast_mm,
+        extract_prob_precip_summary,
+    )
+    from app.prediccion_individual import predecir_semana_municipio
+    from app.core.config import SITES, collect_all_tags
+    from app import alertas
+    from app.user_store import UserStore, UserStoreError
+except ImportError:
+    from api.saih_opendata import fetch_saih_signals
+    from api.aemet_opendata import (
+        fetch_aemet_municipio_horaria,
+        extract_rain_forecast_mm,
+        extract_prob_precip_summary,
+    )
+    from prediccion_individual import predecir_semana_municipio
+    from core.config import SITES, collect_all_tags
+    import alertas
+    from user_store import UserStore, UserStoreError
 
 from collections import defaultdict
 from pathlib import Path
@@ -197,6 +206,11 @@ def limpiar_tokens_invalidos(invalid_tokens):
         )
         guardar_tokens()
 
+    try:
+        removed += user_store.remove_invalid_tokens(invalid_tokens)
+    except Exception as e:
+        print("[PUSH CLEANUP] Error limpiando tokens de usuarios:", repr(e))
+
     return removed
 
 
@@ -222,6 +236,44 @@ app = FastAPI()
 app.mount("/static", StaticFiles(directory=BASE_DIR), name="static")
 
 SITES_BY_ID = {s["id"]: s for s in SITES}
+user_store = UserStore(sites_by_id=SITES_BY_ID)
+
+SESSION_COOKIE_NAME = os.getenv("SESSION_COOKIE_NAME", "rio_session")
+SESSION_COOKIE_SECURE = os.getenv("SESSION_COOKIE_SECURE", "0").lower() in {"1", "true", "yes"}
+SESSION_COOKIE_MAX_AGE = int(os.getenv("SESSION_COOKIE_MAX_AGE", str(60 * 60 * 24 * 30)))
+
+
+def _session_token(request: Request) -> str:
+    return request.cookies.get(SESSION_COOKIE_NAME, "")
+
+
+def _require_user(request: Request) -> dict:
+    user = user_store.get_user_by_session(_session_token(request))
+
+    if not user:
+        raise HTTPException(status_code=401, detail="auth_required")
+
+    return user
+
+
+def _set_session_cookie(response: Response, token: str) -> None:
+    response.set_cookie(
+        key=SESSION_COOKIE_NAME,
+        value=token,
+        max_age=SESSION_COOKIE_MAX_AGE,
+        httponly=True,
+        secure=SESSION_COOKIE_SECURE,
+        samesite="lax",
+    )
+
+
+def _clear_session_cookie(response: Response) -> None:
+    response.delete_cookie(
+        key=SESSION_COOKIE_NAME,
+        httponly=True,
+        secure=SESSION_COOKIE_SECURE,
+        samesite="lax",
+    )
 
 # Cache simple del dataset para IA
 _dataset_modelo_cache: Optional[pd.DataFrame] = None
@@ -339,6 +391,78 @@ def health():
     return {"ok": True}
 
 
+@app.get("/api/users/me")
+def api_current_user(request: Request):
+    user = user_store.get_public_user_by_session(_session_token(request))
+
+    return {
+        "ok": True,
+        "authenticated": user is not None,
+        "user": user,
+    }
+
+
+@app.post("/api/users/register")
+async def api_register(data: dict, response: Response):
+    try:
+        user = user_store.create_user(
+            data.get("name", ""),
+            data.get("email", ""),
+            data.get("password", ""),
+        )
+        session_token = user_store.create_session(user["id"])
+        _set_session_cookie(response, session_token)
+
+        return {"ok": True, "user": user}
+
+    except UserStoreError as e:
+        return JSONResponse({"ok": False, "error": str(e)}, status_code=400)
+
+
+@app.post("/api/users/login")
+async def api_login(data: dict, response: Response):
+    try:
+        user = user_store.authenticate(data.get("email", ""), data.get("password", ""))
+    except UserStoreError:
+        user = None
+
+    if not user:
+        return JSONResponse({"ok": False, "error": "invalid_credentials"}, status_code=401)
+
+    session_token = user_store.create_session(user["id"])
+    _set_session_cookie(response, session_token)
+
+    return {"ok": True, "user": user}
+
+
+@app.post("/api/users/logout")
+async def api_logout(request: Request, response: Response):
+    user_store.delete_session(_session_token(request))
+    _clear_session_cookie(response)
+
+    return {"ok": True}
+
+
+@app.put("/api/users/preferences")
+async def api_update_preferences(data: dict, request: Request):
+    user = _require_user(request)
+
+    try:
+        public_user = user_store.update_preferences(user["id"], data)
+        return {"ok": True, "user": public_user}
+    except UserStoreError as e:
+        return JSONResponse({"ok": False, "error": str(e)}, status_code=400)
+
+
+@app.get("/api/email/config")
+def api_email_config():
+    return {
+        "ok": True,
+        "smtp": alertas.smtp_config_status(),
+        "message": alertas.smtp_config_message(),
+    }
+
+
 @app.post("/api/push-debug")
 async def push_debug(data: dict):
     safe_data = {
@@ -362,9 +486,11 @@ async def push_debug(data: dict):
 
 
 @app.post("/api/token")
-async def save_token(data: dict):
+async def save_token(data: dict, request: Request):
 
     print("📩 Token recibido")
+
+    user = _require_user(request)
 
     token = (data.get("token") or "").strip()
     sites = data.get("sites", [])
@@ -400,6 +526,17 @@ async def save_token(data: dict):
 
             print(f"âš ï¸ Site ignorado: {site!r}")
 
+    try:
+        public_user = user_store.save_push_subscription(
+            user["id"],
+            token,
+            valid_sites,
+            user_agent=user_agent,
+            platform=client_platform,
+        )
+    except UserStoreError as e:
+        return JSONResponse({"ok": False, "error": str(e)}, status_code=400)
+
     # eliminar token previo
     for site_tokens in tokens.values():
         site_tokens.discard(token)
@@ -421,6 +558,7 @@ async def save_token(data: dict):
         "sites": valid_sites,
         "token_saved": bool(valid_sites),
         "total_tokens": total,
+        "user": public_user,
     }
 
 
@@ -451,12 +589,10 @@ async def test_token(data: dict):
 
 
 @app.post("/api/test-selected-alerts")
-async def test_selected_alerts(data: dict):
+async def test_selected_alerts(data: dict, request: Request):
+    user = _require_user(request)
     token = (data.get("token") or "").strip()
     sites = data.get("sites", [])
-
-    if not token:
-        return JSONResponse({"ok": False, "error": "token_empty"}, status_code=400)
 
     if not isinstance(sites, list) or not sites:
         return JSONResponse({"ok": False, "error": "sites_required"}, status_code=400)
@@ -471,25 +607,28 @@ async def test_selected_alerts(data: dict):
         return JSONResponse({"ok": False, "error": "no_valid_sites"}, status_code=400)
 
     alert_sites = [SITES_BY_ID[site_id] for site_id in valid_sites]
-    temp_tokens = defaultdict(set, {site_id: {token} for site_id in valid_sites})
+    preferences = {
+        **(user.get("preferences") or {}),
+        "sites": valid_sites,
+    }
+    temp_user = {
+        **user,
+        "preferences": preferences,
+        "devices": user.get("devices", []),
+    }
 
-    print(
-        f"[PUSH TEST] Alertas seleccionadas solo a {token[:15]} "
-        f"sites={valid_sites}"
+    if preferences.get("notification_channel") != "email":
+        if not token:
+            return JSONResponse({"ok": False, "error": "token_empty"}, status_code=400)
+        temp_user["devices"] = [{"token": token}]
+
+    print(f"[ALERT TEST] user={user.get('email')} channel={preferences.get('notification_channel')} sites={valid_sites}")
+
+    result = await asyncio.to_thread(
+        alertas.enviar_alerta_usuario,
+        temp_user,
+        alert_sites,
     )
-
-    previous_ultimo_envio = alertas.ULTIMO_ENVIO
-    alertas.ULTIMO_ENVIO = None
-
-    try:
-        result = await asyncio.to_thread(
-            alertas.enviar_alertas_diarias,
-            temp_tokens,
-            alert_sites,
-            True,
-        )
-    finally:
-        alertas.ULTIMO_ENVIO = previous_ultimo_envio
 
     removed = limpiar_tokens_invalidos(result.get("invalid_tokens"))
 
@@ -499,14 +638,25 @@ async def test_selected_alerts(data: dict):
         "processed_sites": result.get("processed_sites", 0),
         "sites": valid_sites,
         "invalid_subscriptions_removed": removed,
-        "tokenPrefix": token[:15],
+        "channel": preferences.get("notification_channel"),
+        "errors": result.get("errors", []),
+        "tokenPrefix": token[:15] if token else None,
     }
 
 
 @app.get("/test-alerts-now")
-async def test_alerts_now(sites: Optional[str] = None, all_sites: bool = False):
+async def test_alerts_now(request: Request, sites: Optional[str] = None, all_sites: bool = False):
+    user = _require_user(request)
 
     alert_sites = _filter_alert_sites(sites, allow_all=all_sites)
+
+    if not alert_sites:
+        selected_sites = (user.get("preferences") or {}).get("sites", [])
+        alert_sites = [
+            SITES_BY_ID[site_id]
+            for site_id in selected_sites
+            if site_id in SITES_BY_ID
+        ]
 
     if not alert_sites:
         return JSONResponse(
@@ -518,18 +668,20 @@ async def test_alerts_now(sites: Optional[str] = None, all_sites: bool = False):
             status_code=400,
         )
 
-    previous_ultimo_envio = alertas.ULTIMO_ENVIO
-    alertas.ULTIMO_ENVIO = None
+    site_ids = [site["id"] for site in alert_sites]
+    temp_user = {
+        **user,
+        "preferences": {
+            **(user.get("preferences") or {}),
+            "sites": site_ids,
+        },
+    }
 
-    try:
-        result = await asyncio.to_thread(
-            alertas.enviar_alertas_diarias,
-            tokens,
-            alert_sites,
-            True,
-        )
-    finally:
-        alertas.ULTIMO_ENVIO = previous_ultimo_envio
+    result = await asyncio.to_thread(
+        alertas.enviar_alerta_usuario,
+        temp_user,
+        alert_sites,
+    )
 
     removed = limpiar_tokens_invalidos(result.get("invalid_tokens"))
 
@@ -538,14 +690,16 @@ async def test_alerts_now(sites: Optional[str] = None, all_sites: bool = False):
         "status": "alertas enviadas",
         "sent": result.get("sent", 0),
         "processed_sites": result.get("processed_sites", 0),
-        "sites": [site["id"] for site in alert_sites],
+        "sites": site_ids,
+        "channel": (temp_user.get("preferences") or {}).get("notification_channel"),
+        "errors": result.get("errors", []),
         "invalid_subscriptions_removed": removed,
     }
 
 
 @app.get("/test-alert")
-async def test_alert(sites: Optional[str] = None, all_sites: bool = False):
-    return await test_alerts_now(sites=sites, all_sites=all_sites)
+async def test_alert(request: Request, sites: Optional[str] = None, all_sites: bool = False):
+    return await test_alerts_now(request=request, sites=sites, all_sites=all_sites)
 
 
 @app.get("/firebase-messaging-sw.js")
@@ -944,14 +1098,22 @@ async def poll_alertas_loop():
     while True:
 
         try:
+            due_users = user_store.users_due_for_alert()
+
+            if not due_users:
+                await asyncio.sleep(60)
+                continue
 
             result = await asyncio.to_thread(
-                alertas.enviar_alertas_diarias,
-                tokens,
+                alertas.enviar_alertas_usuarios,
+                due_users,
                 SITES
             )
 
             limpiar_tokens_invalidos(result.get("invalid_tokens"))
+
+            for user_id, user_result in result.get("per_user", {}).items():
+                user_store.mark_alert_result(user_id, user_result)
 
         except Exception as e:
 
