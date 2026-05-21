@@ -8,6 +8,7 @@ import requests
 from requests.adapters import HTTPAdapter
 
 import urllib3
+from urllib3.exceptions import InsecureRequestWarning
 
 # Opcional: en algunos Windows evita problemas de certificados
 try:
@@ -18,7 +19,9 @@ except Exception:
 
 URL = "https://www.saihebro.com/datos/apiopendata"
 HISTORY_REQUEST_DELAY_SECONDS = float(os.getenv("SAIH_HISTORY_REQUEST_DELAY_SECONDS", "0.1"))
+SAIH_SSL_MODE = os.getenv("SAIH_SSL_MODE", "auto").strip().lower()
 SAIH_VERIFY_SSL = os.getenv("SAIH_VERIFY_SSL", "1").lower() not in {"0", "false", "no"}
+_WARNED_INSECURE_SSL = False
 
 
 def _build_session() -> requests.Session:
@@ -57,29 +60,52 @@ def _build_session() -> requests.Session:
 _SESSION = _build_session()
 
 
+def _verify_candidates():
+    if not SAIH_VERIFY_SSL or SAIH_SSL_MODE in {"0", "false", "no", "insecure", "disabled"}:
+        return [False]
+
+    if SAIH_SSL_MODE in {"strict", "certifi"}:
+        return [certifi.where()]
+
+    if SAIH_SSL_MODE == "system":
+        return [True]
+
+    return [certifi.where(), True, False]
+
+
 def _safe_get(url: str, params: dict, timeout=(6, 20)):
+    global _WARNED_INSECURE_SSL
     last_error = None
-    #print("🔥 SAIH CON SSL ACTIVADO")
 
-    for attempt in range(1, 4):
-        try:
-            r = _SESSION.get(
-                url,
-                params=params,
-                timeout=timeout,
-                verify=certifi.where() if SAIH_VERIFY_SSL else False,
-            )
-            r.raise_for_status()
-            return r.json()
+    for verify in _verify_candidates():
+        if verify is False and not _WARNED_INSECURE_SSL:
+            urllib3.disable_warnings(InsecureRequestWarning)
+            print("[SAIH SSL] Usando fallback sin verificacion SSL para saihebro.com")
+            _WARNED_INSECURE_SSL = True
 
-        except requests.exceptions.RequestException as e:
-            last_error = e
-            if attempt < 3:
-                time.sleep(attempt * 1.5)
-            else:
+        for attempt in range(1, 4):
+            try:
+                r = _SESSION.get(
+                    url,
+                    params=params,
+                    timeout=timeout,
+                    verify=verify,
+                )
+                r.raise_for_status()
+                return r.json()
+
+            except requests.exceptions.SSLError as e:
+                last_error = e
                 break
 
-    raise RuntimeError(f"❌ Error conexión SAIH: {last_error}")
+            except requests.exceptions.RequestException as e:
+                last_error = e
+                if attempt < 3:
+                    time.sleep(attempt * 1.5)
+                else:
+                    break
+
+    raise RuntimeError(f"Error conexion SAIH: {last_error}")
 
 
 def fetch_saih_signals(tags: List[str]) -> Dict[str, Dict[str, Any]]:

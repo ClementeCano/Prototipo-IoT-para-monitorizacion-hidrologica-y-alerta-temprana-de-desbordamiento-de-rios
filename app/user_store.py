@@ -9,6 +9,7 @@ from datetime import datetime, timedelta
 from pathlib import Path
 from threading import RLock
 from typing import Any, Optional
+from urllib.parse import quote_plus
 from zoneinfo import ZoneInfo
 
 
@@ -28,6 +29,10 @@ DEFAULT_PREFERENCES = {
     "theme": "dark",
     "sites": [],
 }
+
+VALID_HISTORY_VARIABLES = {"nivel", "caudal", "both"}
+VALID_HISTORY_GRANULARITIES = {"hourly", "daily", "horario", "diario"}
+VALID_HISTORY_FORMATS = {"csv", "xlsx", "excel"}
 
 
 class UserStoreError(ValueError):
@@ -114,7 +119,118 @@ def _verify_password(password: str, stored_hash: str) -> bool:
         return False
 
 
+def _json_object(value: Any) -> dict[str, Any]:
+    if isinstance(value, dict):
+        return value
+
+    if isinstance(value, str):
+        try:
+            parsed = json.loads(value)
+            return parsed if isinstance(parsed, dict) else {}
+        except Exception:
+            return {}
+
+    return {}
+
+
+def _normalize_preferences(preferences: Optional[dict[str, Any]], sites_by_id: Optional[dict[str, Any]] = None) -> dict[str, Any]:
+    current = {
+        **DEFAULT_PREFERENCES,
+        **_json_object(preferences),
+    }
+
+    if current.get("notification_channel") not in VALID_CHANNELS:
+        current["notification_channel"] = DEFAULT_PREFERENCES["notification_channel"]
+
+    if current.get("theme") not in VALID_THEMES:
+        current["theme"] = DEFAULT_PREFERENCES["theme"]
+
+    current["alert_time"] = _normalize_alert_time(str(current.get("alert_time") or DEFAULT_PREFERENCES["alert_time"]))
+    current["sites"] = _valid_sites(current.get("sites", []), sites_by_id or {})
+    return current
+
+
+def _valid_sites(sites: Any, sites_by_id: Optional[dict[str, Any]] = None) -> list[str]:
+    if not isinstance(sites, list):
+        return []
+
+    valid = []
+    sites_by_id = sites_by_id or {}
+
+    for site_id in sites:
+        site_id = str(site_id).strip()
+        if not site_id:
+            continue
+        if sites_by_id and site_id not in sites_by_id:
+            continue
+        if site_id not in valid:
+            valid.append(site_id)
+
+    return valid
+
+
+def _normalize_download_record(
+    download: dict[str, Any],
+    sites_by_id: Optional[dict[str, Any]] = None,
+    existing_id: Optional[str] = None,
+) -> dict[str, Any]:
+    if not isinstance(download, dict):
+        raise UserStoreError("download_invalid")
+
+    sites_by_id = sites_by_id or {}
+    raw_id = str(download.get("id") or existing_id or "").strip()
+    download_id = raw_id[:120] if raw_id else secrets.token_urlsafe(12)
+
+    filename = " ".join(str(download.get("filename") or "historico").strip().split())[:180]
+    site_id = str(download.get("siteId") or download.get("site_id") or "").strip()
+    site = sites_by_id.get(site_id) if site_id else None
+    site_name = str(download.get("site") or download.get("siteName") or (site or {}).get("name") or site_id or "-").strip()[:120]
+
+    variable = str(download.get("variable") or "both").strip().lower()
+    if variable not in VALID_HISTORY_VARIABLES:
+        variable = "both"
+
+    granularity = str(download.get("granularity") or "hourly").strip().lower()
+    if granularity == "horario":
+        granularity = "hourly"
+    if granularity == "diario":
+        granularity = "daily"
+    if granularity not in VALID_HISTORY_GRANULARITIES:
+        granularity = "hourly"
+
+    file_format = str(download.get("format") or download.get("file_format") or "xlsx").strip().lower()
+    if file_format == "excel":
+        file_format = "xlsx"
+    if file_format not in VALID_HISTORY_FORMATS:
+        file_format = "xlsx"
+
+    try:
+        bytes_size = max(0, int(download.get("bytes") or 0))
+    except (TypeError, ValueError):
+        bytes_size = 0
+
+    downloaded_at = str(download.get("downloadedAt") or download.get("downloaded_at") or _iso_now()).strip()
+
+    return {
+        "id": download_id,
+        "filename": filename or f"historico.{file_format}",
+        "siteId": site_id,
+        "site": site_name or "-",
+        "startDate": str(download.get("startDate") or download.get("start_date") or "").strip(),
+        "endDate": str(download.get("endDate") or download.get("end_date") or "").strip(),
+        "variable": variable,
+        "granularity": granularity,
+        "format": file_format,
+        "bytes": bytes_size,
+        "downloadedAt": downloaded_at,
+        "hasLocalHandle": bool(download.get("hasLocalHandle")),
+        "savedWithPicker": bool(download.get("savedWithPicker")),
+    }
+
+
 class UserStore:
+    storage_backend = "json"
+
     def __init__(self, path: Path = USERS_FILE, sites_by_id: Optional[dict[str, Any]] = None):
         self.path = Path(path).resolve()
         self.sites_by_id = sites_by_id or {}
@@ -126,6 +242,7 @@ class UserStore:
             "version": 1,
             "users": {},
             "sessions": {},
+            "downloads": {},
         }
 
     def _load_unlocked(self) -> dict[str, Any]:
@@ -145,6 +262,7 @@ class UserStore:
         data.setdefault("version", 1)
         data.setdefault("users", {})
         data.setdefault("sessions", {})
+        data.setdefault("downloads", {})
 
         for user in data["users"].values():
             user.setdefault("id", secrets.token_urlsafe(10))
@@ -153,23 +271,7 @@ class UserStore:
             user.setdefault("devices", [])
             user.setdefault("alert_state", {})
 
-            preferences = {
-                **DEFAULT_PREFERENCES,
-                **(user.get("preferences") or {}),
-            }
-            preferences["notification_channel"] = (
-                preferences["notification_channel"]
-                if preferences["notification_channel"] in VALID_CHANNELS
-                else DEFAULT_PREFERENCES["notification_channel"]
-            )
-            preferences["theme"] = (
-                preferences["theme"]
-                if preferences["theme"] in VALID_THEMES
-                else DEFAULT_PREFERENCES["theme"]
-            )
-            preferences["alert_time"] = _normalize_alert_time(preferences["alert_time"])
-            preferences["sites"] = self._valid_sites(preferences.get("sites", []))
-            user["preferences"] = preferences
+            user["preferences"] = _normalize_preferences(user.get("preferences"), self.sites_by_id)
 
         return data
 
@@ -182,20 +284,7 @@ class UserStore:
         os.replace(tmp_path, self.path)
 
     def _valid_sites(self, sites: Any) -> list[str]:
-        if not isinstance(sites, list):
-            return []
-
-        valid = []
-        for site_id in sites:
-            site_id = str(site_id).strip()
-            if not site_id:
-                continue
-            if self.sites_by_id and site_id not in self.sites_by_id:
-                continue
-            if site_id not in valid:
-                valid.append(site_id)
-
-        return valid
+        return _valid_sites(sites, self.sites_by_id)
 
     def _public_user(self, user: Optional[dict[str, Any]]) -> Optional[dict[str, Any]]:
         if not user:
@@ -480,6 +569,39 @@ class UserStore:
 
             return removed
 
+    def record_download(self, user_id: str, download: dict[str, Any]) -> dict[str, Any]:
+        with self.lock:
+            data = self._load_unlocked()
+            if user_id not in data["users"]:
+                raise UserStoreError("user_not_found")
+
+            record = _normalize_download_record(download, self.sites_by_id)
+            user_downloads = data.setdefault("downloads", {}).setdefault(user_id, [])
+            user_downloads[:] = [
+                existing
+                for existing in user_downloads
+                if existing.get("id") != record["id"]
+            ]
+            user_downloads.insert(0, record)
+            data["downloads"][user_id] = user_downloads[:100]
+            self._save_unlocked(data)
+            return deepcopy(record)
+
+    def list_downloads(self, user_id: str, limit: int = 50) -> list[dict[str, Any]]:
+        with self.lock:
+            data = self._load_unlocked()
+            if user_id not in data["users"]:
+                raise UserStoreError("user_not_found")
+
+            downloads = data.setdefault("downloads", {}).get(user_id, [])
+            downloads = [
+                _normalize_download_record(download, self.sites_by_id)
+                for download in downloads
+                if isinstance(download, dict)
+            ]
+            downloads.sort(key=lambda item: item.get("downloadedAt", ""), reverse=True)
+            return deepcopy(downloads[: max(1, min(int(limit or 50), 100))])
+
     def users_due_for_alert(self, force: bool = False, user_id: Optional[str] = None) -> list[dict[str, Any]]:
         with self.lock:
             data = self._load_unlocked()
@@ -607,3 +729,52 @@ class UserStore:
 
         for token in expired_tokens:
             data["sessions"].pop(token, None)
+
+
+def create_user_store(sites_by_id: Optional[dict[str, Any]] = None):
+    backend = os.getenv("USER_STORE_BACKEND", "auto").strip().lower()
+    database_url = (
+        os.getenv("DATABASE_URL")
+        or os.getenv("POSTGRES_URL")
+        or os.getenv("POSTGRES_DATABASE_URL")
+        or _database_url_from_parts()
+    )
+
+    wants_postgres = backend in {"postgres", "postgresql", "pg"}
+    auto_postgres = backend == "auto" and bool(database_url)
+
+    if wants_postgres or auto_postgres:
+        if not database_url:
+            raise UserStoreError("database_url_missing")
+
+        try:
+            from app.postgres_user_store import PostgresUserStore
+        except ImportError:
+            from postgres_user_store import PostgresUserStore
+
+        store = PostgresUserStore(database_url=database_url, sites_by_id=sites_by_id)
+
+        if os.getenv("MIGRATE_USERS_JSON_ON_START", "1").lower() in {"1", "true", "yes"}:
+            imported = store.import_json_file(USERS_FILE)
+            if imported:
+                print(f"[POSTGRES MIGRATION] Importados {imported} usuarios desde {USERS_FILE}")
+
+        return store
+
+    return UserStore(sites_by_id=sites_by_id)
+
+
+def _database_url_from_parts() -> Optional[str]:
+    name = os.getenv("DB_NAME")
+    user = os.getenv("DB_USER")
+    password = os.getenv("DB_PASSWORD")
+    host = os.getenv("DB_HOST")
+    port = os.getenv("DB_PORT", "5432")
+
+    if not all([name, user, password, host]):
+        return None
+
+    return (
+        f"postgresql://{quote_plus(user)}:{quote_plus(password)}"
+        f"@{host}:{port}/{quote_plus(name)}"
+    )

@@ -76,7 +76,7 @@ try:
     from app.prediccion_individual import predecir_semana_municipio
     from app.core.config import SITES, collect_all_tags
     from app import alertas
-    from app.user_store import UserStore, UserStoreError
+    from app.user_store import UserStoreError, create_user_store
 except ImportError:
     from app.api.saih_opendata import fetch_saih_history, fetch_saih_signals
     from app.api.aemet_opendata import (
@@ -87,7 +87,7 @@ except ImportError:
     from app.prediccion_individual import predecir_semana_municipio
     from app.core.config import SITES, collect_all_tags
     from app import alertas
-    from app.user_store import UserStore, UserStoreError
+    from app.user_store import UserStoreError, create_user_store
 
 from collections import defaultdict
 from pathlib import Path
@@ -246,8 +246,16 @@ app = FastAPI()
 app.mount("/static", StaticFiles(directory=BASE_DIR), name="static")
 
 SITES_BY_ID = {s["id"]: s for s in SITES}
-user_store = UserStore(sites_by_id=SITES_BY_ID)
-print("USERS_FILE:", user_store.path)
+user_store = create_user_store(sites_by_id=SITES_BY_ID)
+print("USER_STORE:", getattr(user_store, "storage_backend", "json"), user_store.path)
+
+try:
+    stored_token_map = user_store.token_site_map()
+    if stored_token_map:
+        tokens = defaultdict(set, stored_token_map)
+        guardar_tokens()
+except Exception as e:
+    print("[PUSH TOKEN SYNC] Error sincronizando tokens desde usuarios:", repr(e))
 
 SESSION_COOKIE_NAME = os.getenv("SESSION_COOKIE_NAME", "rio_session")
 SESSION_COOKIE_SECURE = os.getenv("SESSION_COOKIE_SECURE", "0").lower() in {"1", "true", "yes"}
@@ -726,6 +734,28 @@ async def api_update_profile(data: dict, request: Request):
         return JSONResponse({"ok": False, "error": str(e)}, status_code=400)
 
 
+@app.get("/api/users/downloads")
+def api_user_downloads(request: Request, limit: int = 50):
+    user = _require_user(request)
+
+    try:
+        downloads = user_store.list_downloads(user["id"], limit=limit)
+        return {"ok": True, "downloads": downloads}
+    except UserStoreError as e:
+        return JSONResponse({"ok": False, "error": str(e)}, status_code=400)
+
+
+@app.post("/api/users/downloads")
+async def api_record_download(data: dict, request: Request):
+    user = _require_user(request)
+
+    try:
+        download = user_store.record_download(user["id"], data)
+        return {"ok": True, "download": download}
+    except UserStoreError as e:
+        return JSONResponse({"ok": False, "error": str(e)}, status_code=400)
+
+
 @app.get("/api/email/config")
 def api_email_config():
     return {
@@ -849,7 +879,7 @@ async def save_token(data: dict, request: Request):
             )
         raise
     except Exception as e:
-        print(f"[PUSH TOKEN ERROR] users_file={user_store.path} error={repr(e)}")
+        print(f"[PUSH TOKEN ERROR] user_store={user_store.path} error={repr(e)}")
         return JSONResponse(
             {
                 "ok": False,

@@ -1259,6 +1259,8 @@
     const historyFilePreviewTitle = document.getElementById("historyFilePreviewTitle");
     const historyFilePreviewBody = document.getElementById("historyFilePreviewBody");
     let historyFilenameEdited = false;
+    let serverHistoryDownloads = [];
+    let historyDownloadsLoadedFor = null;
 
     function togglePasswordVisibility(inputId, button) {
       const input = document.getElementById(inputId);
@@ -1585,7 +1587,7 @@
       return await handle.requestPermission(options) === "granted";
     }
 
-    function readHistoryDownloads() {
+    function readLocalHistoryDownloads() {
       try {
         let changed = false;
         const downloads = JSON.parse(localStorage.getItem(historyDownloadsKey()) || "[]")
@@ -1612,16 +1614,107 @@
       }
     }
 
-    function updateHistoryDownload(downloadId, patch) {
-      const downloads = readHistoryDownloads();
-      const updated = downloads.map(download => (
-        download.id === downloadId
-          ? { ...download, ...patch }
-          : download
-      ));
+    function writeLocalHistoryDownloads(downloads) {
+      localStorage.setItem(historyDownloadsKey(), JSON.stringify(downloads.slice(0, 100)));
+    }
 
-      localStorage.setItem(historyDownloadsKey(), JSON.stringify(updated));
+    function mergeHistoryDownloads(localDownloads, remoteDownloads) {
+      const merged = new Map();
+
+      (remoteDownloads || []).forEach(download => {
+        if (download?.id) {
+          merged.set(download.id, {
+            ...download,
+            hasLocalHandle: false
+          });
+        }
+      });
+
+      (localDownloads || []).forEach(download => {
+        if (download?.id) {
+          merged.set(download.id, {
+            ...(merged.get(download.id) || {}),
+            ...download
+          });
+        }
+      });
+
+      return Array.from(merged.values())
+        .sort((a, b) => String(b.downloadedAt || "").localeCompare(String(a.downloadedAt || "")));
+    }
+
+    function readHistoryDownloads() {
+      return mergeHistoryDownloads(readLocalHistoryDownloads(), serverHistoryDownloads);
+    }
+
+    async function syncHistoryDownloadToServer(download) {
+      if (!currentUser || !download?.id) {
+        return null;
+      }
+
+      try {
+        const data = await apiJson("/api/users/downloads", {
+          method: "POST",
+          body: JSON.stringify(download)
+        });
+
+        if (data.download) {
+          serverHistoryDownloads = mergeHistoryDownloads([data.download], serverHistoryDownloads);
+        }
+
+        return data.download || null;
+      } catch (err) {
+        console.warn("No se pudo sincronizar la descarga con el servidor:", err);
+        return null;
+      }
+    }
+
+    async function loadHistoryDownloads() {
+      if (!currentUser) {
+        serverHistoryDownloads = [];
+        historyDownloadsLoadedFor = null;
+        renderHistoryDownloads();
+        return;
+      }
+
+      if (historyDownloadsLoadedFor === currentUser.id) {
+        return;
+      }
+
+      historyDownloadsLoadedFor = currentUser.id;
+
+      try {
+        const data = await apiJson("/api/users/downloads");
+        serverHistoryDownloads = Array.isArray(data.downloads) ? data.downloads : [];
+      } catch (err) {
+        console.warn("No se pudo cargar el historial del servidor:", err);
+        serverHistoryDownloads = [];
+      }
+
       renderHistoryDownloads();
+    }
+
+    function updateHistoryDownload(downloadId, patch) {
+      const downloads = readLocalHistoryDownloads();
+      const existsLocally = downloads.some(download => download.id === downloadId);
+      const baseDownload = readHistoryDownloads().find(download => download.id === downloadId);
+      const updated = existsLocally
+        ? downloads.map(download => (
+            download.id === downloadId
+              ? { ...download, ...patch }
+              : download
+          ))
+        : baseDownload
+          ? [{ ...baseDownload, ...patch }, ...downloads]
+          : downloads;
+      const updatedDownload = updated.find(download => download.id === downloadId);
+
+      writeLocalHistoryDownloads(updated);
+      renderHistoryDownloads();
+
+      if (updatedDownload) {
+        syncHistoryDownloadToServer(updatedDownload);
+      }
     }
 
     function formatBytes(bytes) {
@@ -1932,10 +2025,12 @@
       });
     }
 
-    function recordHistoryDownload(download) {
-      const downloads = readHistoryDownloads();
+    async function recordHistoryDownload(download) {
+      const downloads = readLocalHistoryDownloads();
       downloads.unshift(download);
-      localStorage.setItem(historyDownloadsKey(), JSON.stringify(downloads.slice(0, 20)));
+      writeLocalHistoryDownloads(downloads.slice(0, 20));
+      renderHistoryDownloads();
+      await syncHistoryDownloadToServer(download);
       renderHistoryDownloads();
     }
 
@@ -2045,9 +2140,10 @@
         const downloadId = createDownloadId();
         const handleSaved = await saveHistoryFileHandle(downloadId, saveHandle);
 
-        recordHistoryDownload({
+        await recordHistoryDownload({
           id: downloadId,
           filename: savedFilename,
+          siteId: historySiteSelect.value,
           site: selectedHistorySiteName(),
           startDate,
           endDate,
@@ -2056,7 +2152,8 @@
           format: historyFormat.value,
           bytes: blob.size,
           downloadedAt: new Date().toISOString(),
-          hasLocalHandle: handleSaved
+          hasLocalHandle: handleSaved,
+          savedWithPicker: Boolean(saveHandle)
         });
 
       } catch (err) {
@@ -2105,10 +2202,13 @@
       alertProfileState.textContent = logged ? "Selecciona los municipios" : "Inicia sesión para guardar";
       userBtn.textContent = logged ? (currentUser.name || "Usuario") : "Usuario";
       renderHistoryDownloads();
+      loadHistoryDownloads();
 
       if (!logged) {
         alertsPanel.style.display = "none";
         historyPanel.style.display = "none";
+        serverHistoryDownloads = [];
+        historyDownloadsLoadedFor = null;
         setAlertButtonState(false);
         return;
       }
