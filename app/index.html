@@ -297,6 +297,12 @@
     border-color: rgba(220,38,38,.46);
   }
 
+  .err.info{
+    color: var(--muted);
+    background: rgba(6,182,212,.08);
+    border-color: rgba(6,182,212,.22);
+  }
+
   table{
     width: 100%;
     max-width:100%;
@@ -556,6 +562,66 @@
     flex: 1;
   }
 
+  .modal-backdrop{
+    position: fixed;
+    inset: 0;
+    z-index: 1000;
+    display: none;
+    align-items: center;
+    justify-content: center;
+    padding: 22px;
+    background: rgba(2, 6, 23, .68);
+    backdrop-filter: blur(10px);
+    -webkit-backdrop-filter: blur(10px);
+  }
+
+  .modal-window{
+    width: min(720px, 100%);
+    max-height: calc(100vh - 44px);
+    overflow: auto;
+  }
+
+  .modal-window.wide{
+    width: min(920px, 100%);
+  }
+
+  .modal-close{
+    border: 1px solid var(--stroke);
+    background: rgba(255,255,255,.08);
+    color: var(--text);
+    border-radius: 10px;
+    cursor: pointer;
+    padding: 8px 11px;
+    font: inherit;
+    font-size: 12px;
+    font-weight: 900;
+  }
+
+  .modal-close:hover{
+    border-color: rgba(6,182,212,.45);
+    background: rgba(6,182,212,.14);
+  }
+
+  .password-help{
+    color: var(--muted);
+    font-size: 12px;
+    line-height: 1.45;
+    margin-top: 2px;
+  }
+
+  .password-help.ok{
+    color: #22c55e;
+  }
+
+  .reliability-head{
+    margin-top: 18px;
+  }
+
+  .reliability-chartwrap{
+    height: 300px;
+    margin-top: 10px;
+  }
+
   .download-list{
     display:grid;
     gap: 8px;
@@ -709,7 +775,13 @@
     </div>
 
     <div class="row">
-      <button onclick="toggleUserPanel()" class="alert-btn secondary" id="userBtn">
+      <button onclick="openLoginPanel()" class="alert-btn secondary" id="loginBtn">
+        Entrar
+      </button>
+      <button onclick="openRegisterPanel()" class="alert-btn secondary" id="registerBtn">
+        Crear cuenta
+      </button>
+      <button onclick="toggleUserPanel()" class="alert-btn secondary" id="userBtn" style="display:none;">
         Usuario
       </button>
       <button onclick="toggleHistoryPanel()" class="alert-btn secondary" id="historyBtn">
@@ -721,71 +793,109 @@
     </div>
   </div>
 
-  <div id="userPanel" class="card settings-panel" style="display:none;">
-    <div class="row" style="justify-content: space-between;">
-      <h3 class="sectiontitle">Cuenta de usuario</h3>
-      <span class="pill" id="sessionState">Sin sesión</span>
-    </div>
-
-    <div id="authLoggedOut" class="row" style="align-items:flex-start;">
-      <div class="auth-card">
+  <div id="loginPanel" class="modal-backdrop" style="display:none;">
+    <div class="card settings-panel modal-window">
+      <div class="row" style="justify-content: space-between;">
         <h3 class="sectiontitle">Entrar</h3>
-        <div class="settings-grid" style="grid-template-columns:1fr;">
-          <div class="field">
-            <span>Email</span>
-            <input id="loginEmail" type="email" autocomplete="email">
-          </div>
-          <div class="field">
-            <span>Contraseña</span>
-            <div class="password-wrap">
-              <input id="loginPassword" type="password" autocomplete="current-password">
-              <button
-                type="button"
-                class="password-toggle"
-                onclick="togglePasswordVisibility('loginPassword', this)"
-                aria-label="Mostrar contraseña"
-                title="Mostrar contraseña"
-              >
-                👁
-              </button>
-            </div>
-          </div>
-          <button onclick="loginUser()" class="alert-btn active">Entrar</button>
-        </div>
+        <button type="button" class="modal-close" onclick="closeModal('loginPanel')">Cerrar</button>
       </div>
-
-      <div class="auth-card">
-        <h3 class="sectiontitle">Crear cuenta</h3>
-        <div class="settings-grid" style="grid-template-columns:1fr;">
-          <div class="field">
-            <span>Nombre</span>
-            <input id="registerName" type="text" autocomplete="name">
+      <div class="settings-grid" style="grid-template-columns:1fr;">
+        <div class="field">
+          <span>Email</span>
+          <input id="loginEmail" type="email" autocomplete="email">
+        </div>
+        <div class="field">
+          <span>Contraseña</span>
+          <div class="password-wrap">
+            <input id="loginPassword" type="password" autocomplete="current-password">
+            <button
+              type="button"
+              class="password-toggle"
+              onclick="togglePasswordVisibility('loginPassword', this)"
+              aria-label="Mostrar contraseña"
+              title="Mostrar contraseña"
+            >
+              👁
+            </button>
           </div>
-          <div class="field">
-            <span>Email</span>
-            <input id="registerEmail" type="email" autocomplete="email">
-          </div>
-          <div class="field">
-            <span>Contraseña</span>
-            <div class="password-wrap">
-              <input id="registerPassword" type="password" autocomplete="new-password">
-              <button
-                type="button"
-                class="password-toggle"
-                onclick="togglePasswordVisibility('registerPassword', this)"
-                aria-label="Mostrar contraseña"
-                title="Mostrar contraseña"
-              >
-                👁
-              </button>
-            </div>
-          </div>
-          <button onclick="registerUser()" class="alert-btn">Crear cuenta</button>
+        </div>
+        <div class="row form-actions">
+          <button onclick="loginUser()" class="alert-btn active primary-action">Entrar</button>
+          <button onclick="openRegisterPanel()" class="alert-btn secondary">Crear cuenta</button>
         </div>
       </div>
     </div>
+  </div>
 
-    <div id="authLoggedIn" style="display:none;">
+  <div id="registerPanel" class="modal-backdrop" style="display:none;">
+    <div class="card settings-panel modal-window">
+      <div class="row" style="justify-content: space-between;">
+        <h3 class="sectiontitle">Crear cuenta</h3>
+        <button type="button" class="modal-close" onclick="closeModal('registerPanel')">Cerrar</button>
+      </div>
+      <div class="settings-grid" style="grid-template-columns:1fr;">
+        <div class="field">
+          <span>Nombre</span>
+          <input id="registerName" type="text" autocomplete="name">
+        </div>
+        <div class="field">
+          <span>Email</span>
+          <input id="registerEmail" type="email" autocomplete="email">
+        </div>
+        <div class="field">
+          <span>Contraseña</span>
+          <div class="password-wrap">
+            <input id="registerPassword" type="password" autocomplete="new-password">
+            <button
+              type="button"
+              class="password-toggle"
+              onclick="togglePasswordVisibility('registerPassword', this)"
+              aria-label="Mostrar contraseña"
+              title="Mostrar contraseña"
+            >
+              👁
+            </button>
+          </div>
+          <div id="registerPasswordHelp" class="password-help">
+            Usa al menos 8 caracteres, con mayúscula, minúscula y número.
+          </div>
+        </div>
+        <div class="field">
+          <span>Repetir contraseña</span>
+          <div class="password-wrap">
+            <input id="registerPasswordConfirm" type="password" autocomplete="new-password">
+            <button
+              type="button"
+              class="password-toggle"
+              onclick="togglePasswordVisibility('registerPasswordConfirm', this)"
+              aria-label="Mostrar contraseña"
+              title="Mostrar contraseña"
+            >
+              👁
+            </button>
+          </div>
+        </div>
+        <div class="row form-actions">
+          <button onclick="registerUser()" class="alert-btn active primary-action">Crear cuenta</button>
+          <button onclick="openLoginPanel()" class="alert-btn secondary">Ya tengo cuenta</button>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <div id="userPanel" class="modal-backdrop" style="display:none;">
+    <div class="card settings-panel modal-window">
+      <div class="row" style="justify-content: space-between;">
+        <h3 class="sectiontitle">Cuenta de usuario</h3>
+        <div class="row">
+          <span class="pill" id="sessionState">Sin sesión</span>
+          <button type="button" class="modal-close" onclick="closeModal('userPanel')">Cerrar</button>
+        </div>
+      </div>
+
+      <div id="authLoggedOut" style="display:none;"></div>
+
+      <div id="authLoggedIn" style="display:none;">
       <div class="row" style="justify-content: space-between;">
         <div>
           <div class="label">Sesión iniciada</div>
@@ -832,12 +942,16 @@
       </div>
     </div>
   </div>
+  </div>
 
-  <div id="alertsPanel" style="display:none; margin-top:12px;">
-    <div class="card settings-panel">
+  <div id="alertsPanel" class="modal-backdrop" style="display:none;">
+    <div class="card settings-panel modal-window">
       <div class="row" style="justify-content: space-between;">
         <h3 class="sectiontitle">Programar alertas</h3>
-        <span class="pill" id="alertProfileState">Inicia sesión para guardar</span>
+        <div class="row">
+          <span class="pill" id="alertProfileState">Inicia sesión para guardar</span>
+          <button type="button" class="modal-close" onclick="closeModal('alertsPanel')">Cerrar</button>
+        </div>
       </div>
 
       <div id="alertsAuthNotice" class="muted">
@@ -870,10 +984,14 @@
 
   </div>
 
-  <div id="historyPanel" class="card settings-panel" style="display:none;">
+  <div id="historyPanel" class="modal-backdrop" style="display:none;">
+    <div class="card settings-panel modal-window wide">
     <div class="row" style="justify-content: space-between;">
       <h3 class="sectiontitle">Descarga de histórico</h3>
-      <span class="pill">Máximo: <span id="historyEndLabel" class="mono">-</span></span>
+      <div class="row">
+        <span class="pill">Máximo: <span id="historyEndLabel" class="mono">-</span></span>
+        <button type="button" class="modal-close" onclick="closeModal('historyPanel')">Cerrar</button>
+      </div>
     </div>
 
     <div class="settings-grid">
@@ -939,6 +1057,7 @@
       </div>
       <div id="historyFilePreviewBody" class="history-preview-body"></div>
     </div>
+  </div>
   </div>
 
   <!-- GRID PRINCIPAL -->
@@ -1068,6 +1187,20 @@
 
     <div class="chartwrap">
       <canvas id="predChart"></canvas>
+    </div>
+
+    <div class="row reliability-head" style="justify-content: space-between;">
+      <h3 class="sectiontitle">Fiabilidad del modelo</h3>
+      <div class="row">
+        <span class="pill">MAE nivel: <span id="reliabilityNivelMae" class="mono">-</span></span>
+        <span class="pill">MAE caudal: <span id="reliabilityCaudalMae" class="mono">-</span></span>
+      </div>
+    </div>
+
+    <div id="reliabilityErr" class="err"></div>
+
+    <div class="chartwrap reliability-chartwrap">
+      <canvas id="reliabilityChart"></canvas>
     </div>
   </div>
 
@@ -1228,7 +1361,11 @@
     let emailConfig = null;
 
     const userPanel = document.getElementById("userPanel");
+    const loginPanel = document.getElementById("loginPanel");
+    const registerPanel = document.getElementById("registerPanel");
     const userBtn = document.getElementById("userBtn");
+    const loginBtn = document.getElementById("loginBtn");
+    const registerBtn = document.getElementById("registerBtn");
     const sessionState = document.getElementById("sessionState");
     const authLoggedOut = document.getElementById("authLoggedOut");
     const authLoggedIn = document.getElementById("authLoggedIn");
@@ -1258,9 +1395,17 @@
     const historyFilePreview = document.getElementById("historyFilePreview");
     const historyFilePreviewTitle = document.getElementById("historyFilePreviewTitle");
     const historyFilePreviewBody = document.getElementById("historyFilePreviewBody");
+    const registerPassword = document.getElementById("registerPassword");
+    const registerPasswordConfirm = document.getElementById("registerPasswordConfirm");
+    const registerPasswordHelp = document.getElementById("registerPasswordHelp");
+    const reliabilityErr = document.getElementById("reliabilityErr");
+    const reliabilityNivelMae = document.getElementById("reliabilityNivelMae");
+    const reliabilityCaudalMae = document.getElementById("reliabilityCaudalMae");
     let historyFilenameEdited = false;
     let serverHistoryDownloads = [];
     let historyDownloadsLoadedFor = null;
+    let reliabilityChart = null;
+    let reliabilityRequestId = 0;
 
     function togglePasswordVisibility(inputId, button) {
       const input = document.getElementById(inputId);
@@ -1277,6 +1422,89 @@
     }
 
     window.togglePasswordVisibility = togglePasswordVisibility;
+
+    function openModal(panel) {
+      if (!panel) return;
+      panel.style.display = "flex";
+    }
+
+    function closeModal(panelId) {
+      const panel = document.getElementById(panelId);
+      if (panel) {
+        panel.style.display = "none";
+      }
+    }
+
+    function openLoginPanel() {
+      closeModal("registerPanel");
+      closeModal("userPanel");
+      closeModal("alertsPanel");
+      closeModal("historyPanel");
+      openModal(loginPanel);
+      setTimeout(() => document.getElementById("loginEmail")?.focus(), 30);
+    }
+
+    function openRegisterPanel() {
+      closeModal("loginPanel");
+      closeModal("userPanel");
+      closeModal("alertsPanel");
+      closeModal("historyPanel");
+      openModal(registerPanel);
+      setTimeout(() => document.getElementById("registerName")?.focus(), 30);
+    }
+
+    function getPasswordValidation(password, confirmation) {
+      const checks = {
+        length: password.length >= 8,
+        lower: /[a-záéíóúüñ]/.test(password),
+        upper: /[A-ZÁÉÍÓÚÜÑ]/.test(password),
+        number: /\d/.test(password),
+        match: password.length > 0 && password === confirmation
+      };
+
+      return {
+        ...checks,
+        ok: checks.length && checks.lower && checks.upper && checks.number && checks.match
+      };
+    }
+
+    function updateRegisterPasswordHelp() {
+      if (!registerPassword || !registerPasswordConfirm || !registerPasswordHelp) {
+        return;
+      }
+
+      const validation = getPasswordValidation(registerPassword.value, registerPasswordConfirm.value);
+      const pending = [];
+
+      if (!validation.length) pending.push("8 caracteres");
+      if (!validation.upper) pending.push("una mayúscula");
+      if (!validation.lower) pending.push("una minúscula");
+      if (!validation.number) pending.push("un número");
+      if (!validation.match && registerPasswordConfirm.value) pending.push("que ambas contraseñas coincidan");
+
+      registerPasswordHelp.classList.toggle("ok", validation.ok);
+      registerPasswordHelp.textContent = validation.ok
+        ? "Contraseña segura y confirmada."
+        : `Debe incluir ${pending.join(", ") || "confirmación de contraseña"}.`;
+    }
+
+    window.closeModal = closeModal;
+    window.openLoginPanel = openLoginPanel;
+    window.openRegisterPanel = openRegisterPanel;
+
+    document.querySelectorAll(".modal-backdrop").forEach(panel => {
+      panel.addEventListener("click", (event) => {
+        if (event.target === panel) {
+          panel.style.display = "none";
+        }
+      });
+    });
+
+    document.addEventListener("keydown", (event) => {
+      if (event.key !== "Escape") return;
+      ["loginPanel", "registerPanel", "userPanel", "alertsPanel", "historyPanel"]
+        .forEach(closeModal);
+    });
 
     async function getFirebaseMessagingSupported() {
       try {
@@ -1342,6 +1570,10 @@
 
       if (lastPredData) {
         updatePredChart(lastPredData);
+      }
+
+      if (currentSite) {
+        loadReliabilityChart(currentSite);
       }
     }
 
@@ -1417,12 +1649,12 @@
     function toggleHistoryPanel() {
       if (!currentUser) {
         historyPanel.style.display = "none";
-        userPanel.style.display = "block";
-        alert("Inicia sesion para descargar historicos.");
+        openLoginPanel();
+        alert("Inicia sesión para descargar históricos.");
         return;
       }
 
-      historyPanel.style.display = historyPanel.style.display === "none" ? "block" : "none";
+      historyPanel.style.display = historyPanel.style.display === "none" ? "flex" : "none";
       initHistoryForm();
     }
 
@@ -2052,8 +2284,8 @@
       setHistoryError("");
 
       if (!currentUser) {
-        userPanel.style.display = "block";
-        setHistoryError("Inicia sesion para descargar historicos.");
+        openLoginPanel();
+        setHistoryError("Inicia sesión para descargar históricos.");
         return;
       }
 
@@ -2193,10 +2425,14 @@
 
     function updateAuthUI() {
       const logged = Boolean(currentUser);
-      authLoggedOut.style.display = logged ? "none" : "flex";
+      authLoggedOut.style.display = "none";
       authLoggedIn.style.display = logged ? "block" : "none";
       alertsAuthNotice.style.display = logged ? "none" : "block";
       alertsControls.style.display = logged ? "block" : "none";
+
+      loginBtn.style.display = logged ? "none" : "inline-flex";
+      registerBtn.style.display = logged ? "none" : "inline-flex";
+      userBtn.style.display = logged ? "inline-flex" : "none";
 
       sessionState.textContent = logged ? "Sesión activa" : "Sin sesión";
       alertProfileState.textContent = logged ? "Selecciona los municipios" : "Inicia sesión para guardar";
@@ -2207,6 +2443,7 @@
       if (!logged) {
         alertsPanel.style.display = "none";
         historyPanel.style.display = "none";
+        userPanel.style.display = "none";
         serverHistoryDownloads = [];
         historyDownloadsLoadedFor = null;
         setAlertButtonState(false);
@@ -2264,6 +2501,19 @@
       return data;
     }
 
+    function authErrorMessage(error) {
+      const message = error?.message || String(error || "");
+      const messages = {
+        password_too_short: "La contraseña debe tener al menos 8 caracteres.",
+        password_not_secure: "La contraseña debe incluir mayúscula, minúscula y número.",
+        email_already_registered: "Ya existe una cuenta con ese email.",
+        invalid_email: "Introduce un email válido.",
+        invalid_name: "Introduce un nombre válido.",
+        invalid_credentials: "Email o contraseña incorrectos."
+      };
+      return messages[message] || message;
+    }
+
     async function loadCurrentUser() {
       try {
         const data = await apiJson("/api/users/me");
@@ -2291,19 +2541,31 @@
 
     async function registerUser() {
       try {
+        const password = document.getElementById("registerPassword").value;
+        const confirmation = document.getElementById("registerPasswordConfirm").value;
+        const validation = getPasswordValidation(password, confirmation);
+
+        if (!validation.ok) {
+          updateRegisterPasswordHelp();
+          alert("Revisa la contraseña: debe ser segura y coincidir en ambos campos.");
+          return;
+        }
+
         const data = await apiJson("/api/users/register", {
           method: "POST",
           body: JSON.stringify({
             name: document.getElementById("registerName").value,
             email: document.getElementById("registerEmail").value,
-            password: document.getElementById("registerPassword").value
+            password
           })
         });
         currentUser = data.user;
         updateAuthUI();
+        closeModal("registerPanel");
+        openModal(userPanel);
         alert("Cuenta creada");
       } catch (err) {
-        alert(`No se pudo crear la cuenta: ${err.message}`);
+        alert(`No se pudo crear la cuenta: ${authErrorMessage(err)}`);
       }
     }
 
@@ -2318,8 +2580,10 @@
         });
         currentUser = data.user;
         updateAuthUI();
+        closeModal("loginPanel");
+        openModal(userPanel);
       } catch (err) {
-        alert("Email o contraseña incorrectos");
+        alert(authErrorMessage(err));
       }
     }
 
@@ -2333,11 +2597,12 @@
       currentUser = null;
       firebaseToken = null;
       updateAuthUI();
+      closeModal("userPanel");
     }
 
     async function savePreferencesToServer() {
       if (!currentUser) {
-        userPanel.style.display = "block";
+        openLoginPanel();
         throw new Error("auth_required");
       }
 
@@ -2364,7 +2629,12 @@
     }
 
     function toggleUserPanel() {
-      userPanel.style.display = userPanel.style.display === "none" ? "block" : "none";
+      if (!currentUser) {
+        openLoginPanel();
+        return;
+      }
+
+      userPanel.style.display = userPanel.style.display === "none" ? "flex" : "none";
     }
 
     function setConn(isUp) {
@@ -2633,6 +2903,167 @@
       });
     }
 
+    function clearReliabilityChart(message = "") {
+      if (reliabilityChart) {
+        reliabilityChart.destroy();
+        reliabilityChart = null;
+      }
+
+      reliabilityNivelMae.textContent = "-";
+      reliabilityCaudalMae.textContent = "-";
+      reliabilityErr.classList.remove("info");
+
+      if (message) {
+        reliabilityErr.style.display = "block";
+        reliabilityErr.textContent = message;
+      } else {
+        reliabilityErr.style.display = "none";
+        reliabilityErr.textContent = "";
+      }
+    }
+
+    function updateReliabilityChart(data) {
+      const canvas = document.getElementById("reliabilityChart");
+      if (!canvas) return;
+
+      const points = Array.isArray(data?.points) ? data.points : [];
+
+      if (!points.length) {
+        clearReliabilityChart(data?.error ? `No hay validación disponible: ${data.error}` : "No hay datos de validación.");
+        return;
+      }
+
+      reliabilityErr.classList.remove("info");
+      reliabilityErr.style.display = "none";
+      reliabilityErr.textContent = "";
+      reliabilityNivelMae.textContent = data.metrics?.nivel_mae ?? "-";
+      reliabilityCaudalMae.textContent = data.metrics?.caudal_mae ?? "-";
+
+      const labels = points.map(point => point.date);
+      const chartTextColor = getChartTextColor();
+
+      if (reliabilityChart) {
+        reliabilityChart.destroy();
+      }
+
+      reliabilityChart = new Chart(canvas, {
+        type: "line",
+        data: {
+          labels,
+          datasets: [
+            {
+              label: "Nivel real (m)",
+              data: points.map(point => point.nivel_real),
+              borderWidth: 3,
+              tension: 0.25,
+              pointRadius: 4,
+              borderColor: "#22c55e",
+              yAxisID: "yNivel"
+            },
+            {
+              label: "Nivel predicho (m)",
+              data: points.map(point => point.nivel_pred),
+              borderWidth: 2,
+              borderDash: [7, 5],
+              tension: 0.25,
+              pointRadius: 4,
+              borderColor: "#38bdf8",
+              yAxisID: "yNivel"
+            },
+            {
+              label: "Caudal real (m³/s)",
+              data: points.map(point => point.caudal_real),
+              borderWidth: 3,
+              tension: 0.25,
+              pointRadius: 4,
+              borderColor: "#f59e0b",
+              yAxisID: "yCaudal"
+            },
+            {
+              label: "Caudal predicho (m³/s)",
+              data: points.map(point => point.caudal_pred),
+              borderWidth: 2,
+              borderDash: [7, 5],
+              tension: 0.25,
+              pointRadius: 4,
+              borderColor: "#a78bfa",
+              yAxisID: "yCaudal"
+            }
+          ]
+        },
+        options: {
+          responsive: true,
+          maintainAspectRatio: false,
+          plugins: {
+            legend: {
+              labels: { color: chartTextColor }
+            },
+            tooltip: {
+              mode: "index",
+              intersect: false
+            }
+          },
+          interaction: {
+            mode: "index",
+            intersect: false
+          },
+          scales: {
+            x: {
+              ticks: { color: chartTextColor },
+              grid: { color: "rgba(148,163,184,.12)" }
+            },
+            yNivel: {
+              type: "linear",
+              position: "left",
+              ticks: { color: chartTextColor },
+              title: {
+                display: true,
+                text: "Nivel (m)",
+                color: chartTextColor
+              }
+            },
+            yCaudal: {
+              type: "linear",
+              position: "right",
+              ticks: { color: chartTextColor },
+              grid: { drawOnChartArea: false },
+              title: {
+                display: true,
+                text: "Caudal (m³/s)",
+                color: chartTextColor
+              }
+            }
+          }
+        }
+      });
+    }
+
+    async function loadReliabilityChart(siteId) {
+      if (!siteId) {
+        clearReliabilityChart();
+        return;
+      }
+
+      const requestId = ++reliabilityRequestId;
+      clearReliabilityChart();
+      reliabilityErr.classList.add("info");
+      reliabilityErr.style.display = "block";
+      reliabilityErr.textContent = "Calculando fiabilidad del modelo...";
+
+      try {
+        const data = await apiJson(`/api/prediction/reliability/${encodeURIComponent(siteId)}`);
+        if (requestId !== reliabilityRequestId) {
+          return;
+        }
+        updateReliabilityChart(data);
+      } catch (err) {
+        if (requestId !== reliabilityRequestId) {
+          return;
+        }
+        clearReliabilityChart(err.message || "No se pudo cargar la fiabilidad del modelo.");
+      }
+    }
+
     function updateIAState(error, pred) {
       iaRef.textContent = window._lastIaRef ?? "-";
 
@@ -2687,9 +3118,11 @@
       initHistoryForm();
 
       currentSite = sites[0]?.id ?? null;
+      loadReliabilityChart(currentSite);
 
       siteSelect.addEventListener("change", () => {
         currentSite = siteSelect.value;
+        loadReliabilityChart(currentSite);
 
         // 🔥 centrar mapa al seleccionar
         const s = sitesGlobal.find(x => x.id === currentSite);
@@ -2955,6 +3388,8 @@
     historyFileName.addEventListener("input", () => {
       historyFilenameEdited = true;
     });
+    registerPassword?.addEventListener("input", updateRegisterPasswordHelp);
+    registerPasswordConfirm?.addEventListener("input", updateRegisterPasswordHelp);
     prefTheme.addEventListener("change", () => applyTheme(prefTheme.value));
     prefChannel.addEventListener("change", () => {
       alertProfileState.textContent = prefChannel.value === "email"
@@ -3133,7 +3568,7 @@
         await logPushDebug("subscription_start", { allowPrompt, requireSites });
 
         if (!currentUser) {
-          userPanel.style.display = "block";
+          openLoginPanel();
           throw new Error("auth_required");
         }
 
@@ -3245,12 +3680,12 @@
       const panel = document.getElementById("alertsPanel");
 
       if (!currentUser) {
-        userPanel.style.display = "block";
+        openLoginPanel();
         alert("Inicia sesión para programar alertas.");
         return;
       }
 
-      panel.style.display = panel.style.display === "none" ? "block" : "none";
+      panel.style.display = panel.style.display === "none" ? "flex" : "none";
     }
 
     window.addEventListener("load", () => {
@@ -3279,7 +3714,7 @@
     const selectedSites = getSelectedAlertSites();
 
     if (!currentUser) {
-      userPanel.style.display = "block";
+      openLoginPanel();
       throw new Error("auth_required");
     }
 
@@ -3357,7 +3792,7 @@
   window.removeCurrentDeviceAlerts = async function() {
     try {
       if (!currentUser) {
-        userPanel.style.display = "block";
+        openLoginPanel();
         alert("Inicia sesión para modificar tus alertas");
         return;
       }
@@ -3396,7 +3831,7 @@
   window.saveAlerts = async function() {
     try {
       if (!currentUser) {
-        userPanel.style.display = "block";
+        openLoginPanel();
         alert("Inicia sesión para guardar tus alertas");
         return;
       }

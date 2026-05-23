@@ -88,6 +88,13 @@ def _hash_password(password: str) -> str:
     if len(password or "") < 8:
         raise UserStoreError("password_too_short")
 
+    if (
+        not re.search(r"[a-záéíóúüñ]", password or "")
+        or not re.search(r"[A-ZÁÉÍÓÚÜÑ]", password or "")
+        or not re.search(r"\d", password or "")
+    ):
+        raise UserStoreError("password_not_secure")
+
     iterations = 200_000
     salt = secrets.token_hex(16)
     digest = hashlib.pbkdf2_hmac(

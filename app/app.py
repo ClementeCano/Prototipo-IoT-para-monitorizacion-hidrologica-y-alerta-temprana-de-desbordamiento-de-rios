@@ -73,7 +73,7 @@ try:
         extract_rain_forecast_mm,
         extract_prob_precip_summary,
     )
-    from app.prediccion_individual import predecir_semana_municipio
+    from app.prediccion_individual import evaluar_fiabilidad_municipio, predecir_semana_municipio
     from app.core.config import SITES, collect_all_tags
     from app import alertas
     from app.user_store import UserStoreError, create_user_store
@@ -84,7 +84,7 @@ except ImportError:
         extract_rain_forecast_mm,
         extract_prob_precip_summary,
     )
-    from app.prediccion_individual import predecir_semana_municipio
+    from app.prediccion_individual import evaluar_fiabilidad_municipio, predecir_semana_municipio
     from app.core.config import SITES, collect_all_tags
     from app import alertas
     from app.user_store import UserStoreError, create_user_store
@@ -464,6 +464,7 @@ saih_cache_by_site: Dict[str, Dict[str, Any]] = {}
 ia_cache_by_site: Dict[str, Dict[str, Any]] = {}
 ia_inflight: set[str] = set()
 ia_epoch_by_site: Dict[str, float] = {}
+ia_reliability_cache_by_site: Dict[str, Dict[str, Any]] = {}
 
 def _default_ia() -> Dict[str, Any]:
     return {
@@ -508,6 +509,21 @@ def api_sites():
         }
         for s in SITES
     ])
+
+
+@app.get("/api/prediction/reliability/{site_id}")
+async def api_prediction_reliability(site_id: str):
+    if site_id not in SITES_BY_ID:
+        raise HTTPException(status_code=404, detail="site_not_found")
+
+    cached = ia_reliability_cache_by_site.get(site_id)
+    if cached:
+        return {"ok": True, "site_id": site_id, **cached}
+
+    result = await asyncio.to_thread(evaluar_fiabilidad_municipio, site_id)
+    result["generated_at"] = datetime.now().isoformat(timespec="seconds")
+    ia_reliability_cache_by_site[site_id] = result
+    return {"ok": True, "site_id": site_id, **result}
 
 
 @app.get("/api/history/download")
