@@ -2937,7 +2937,13 @@
       const points = Array.isArray(data?.points) ? data.points : [];
 
       if (!points.length) {
-        clearReliabilityChart(data?.error ? `No hay validación disponible: ${data.error}` : "No hay datos de validación.");
+        const message = data?.error
+          ? `No hay validacion disponible: ${data.error}`
+          : data?.total > 0
+            ? "Ya hay predicciones guardadas. La comparativa se completara cuando SAIH tenga datos reales hasta ayer."
+            : "Aun no hay predicciones guardadas para comparar. Se guardaran al generar la prediccion semanal.";
+        clearReliabilityChart(message);
+        reliabilityErr.classList.add("info");
         return;
       }
 
@@ -2947,7 +2953,10 @@
       reliabilityNivelMae.textContent = data.metrics?.nivel_mae ?? "-";
       reliabilityCaudalMae.textContent = data.metrics?.caudal_mae ?? "-";
 
-      const labels = points.map(point => point.date);
+      const labels = points.map(point => {
+        const day = point.target_date || point.date || "-";
+        return point.horizon_day ? `${day} (D+${point.horizon_day})` : day;
+      });
       const chartTextColor = getChartTextColor();
 
       if (reliabilityChart) {
@@ -3056,7 +3065,7 @@
       clearReliabilityChart();
       reliabilityErr.classList.add("info");
       reliabilityErr.style.display = "block";
-      reliabilityErr.textContent = "Calculando fiabilidad del modelo...";
+      reliabilityErr.textContent = "Actualizando comparativa con datos reales de SAIH...";
 
       try {
         const data = await apiJson(`/api/prediction/reliability/${encodeURIComponent(siteId)}`);

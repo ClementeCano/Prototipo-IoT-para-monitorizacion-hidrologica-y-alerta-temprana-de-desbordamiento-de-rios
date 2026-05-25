@@ -4,9 +4,11 @@ import json
 import os
 import sys
 import unicodedata
+from pathlib import Path
 from dotenv import load_dotenv
 
 load_dotenv()
+APP_DIR = Path(__file__).resolve().parent
 import traceback
 
 for stream in (sys.stdout, sys.stderr):
@@ -33,7 +35,20 @@ try:
     elif firebase_json:
         firebase_cred_source = json.loads(firebase_json)
     elif firebase_path:
-        firebase_cred_source = firebase_path
+        firebase_candidate = Path(firebase_path)
+
+        if firebase_candidate.is_absolute():
+            firebase_cred_source = str(firebase_candidate)
+        else:
+            cwd_candidate = Path.cwd() / firebase_candidate
+            app_candidate = APP_DIR / firebase_candidate
+            firebase_cred_source = str(
+                cwd_candidate
+                if cwd_candidate.exists()
+                else app_candidate
+                if app_candidate.exists()
+                else firebase_candidate
+            )
 
     if not firebase_cred_source:
         raise RuntimeError(
@@ -49,10 +64,6 @@ try:
 except Exception as e:
     print("❌ Error Firebase:", e)
 
-
-
-
-from pathlib import Path
 from datetime import date, datetime, timedelta
 import asyncio
 from concurrent.futures import ProcessPoolExecutor
@@ -73,7 +84,8 @@ try:
         extract_rain_forecast_mm,
         extract_prob_precip_summary,
     )
-    from app.prediccion_individual import evaluar_fiabilidad_municipio, predecir_semana_municipio
+    from app.prediccion_individual import predecir_semana_municipio
+    from app.prediction_store import create_prediction_store
     from app.core.config import SITES, collect_all_tags
     from app import alertas
     from app.user_store import UserStoreError, create_user_store
@@ -84,20 +96,17 @@ except ImportError:
         extract_rain_forecast_mm,
         extract_prob_precip_summary,
     )
-    from app.prediccion_individual import evaluar_fiabilidad_municipio, predecir_semana_municipio
+    from app.prediccion_individual import predecir_semana_municipio
+    from app.prediction_store import create_prediction_store
     from app.core.config import SITES, collect_all_tags
     from app import alertas
     from app.user_store import UserStoreError, create_user_store
 
 from collections import defaultdict
-from pathlib import Path
 
 # =========================
 # TOKENS PERSISTENTES
 # =========================
-from pathlib import Path
-from collections import defaultdict
-import json
 
 # 🔥 usar ruta absoluta estable
 BASE_DIR = Path(__file__).resolve().parent
@@ -241,6 +250,8 @@ IA_PROCESS_POOL_ENABLED = os.getenv("IA_PROCESS_POOL_ENABLED", "1").lower() in {
 IA_REFRESH_ON_WS = os.getenv("IA_REFRESH_ON_WS", "1").lower() in {"1", "true", "yes"}
 IA_EXECUTOR = ProcessPoolExecutor(max_workers=IA_WORKERS) if IA_PROCESS_POOL_ENABLED else None
 HISTORY_DOWNLOAD_MAX_DAYS = int(os.getenv("HISTORY_DOWNLOAD_MAX_DAYS", "366"))
+PREDICTION_EVAL_LOOKBACK_DAYS = int(os.getenv("PREDICTION_EVAL_LOOKBACK_DAYS", "30"))
+PREDICTION_EVAL_CHECK_SECONDS = int(os.getenv("PREDICTION_EVAL_CHECK_SECONDS", "3600"))
 
 app = FastAPI()
 app.mount("/static", StaticFiles(directory=BASE_DIR), name="static")
@@ -248,6 +259,8 @@ app.mount("/static", StaticFiles(directory=BASE_DIR), name="static")
 SITES_BY_ID = {s["id"]: s for s in SITES}
 user_store = create_user_store(sites_by_id=SITES_BY_ID)
 print("USER_STORE:", getattr(user_store, "storage_backend", "json"), user_store.path)
+prediction_store = create_prediction_store()
+print("PREDICTION_STORE:", getattr(prediction_store, "storage_backend", "json"), prediction_store.path)
 
 try:
     stored_token_map = user_store.token_site_map()
@@ -428,6 +441,97 @@ def _build_history_dataframe(
     return grouped[columns]
 
 
+def _prediction_actual_tags(site: dict[str, Any]) -> list[str]:
+    saih_config = site.get("saih") or {}
+    return [
+        tag
+        for tag in [saih_config.get("nivel"), saih_config.get("caudal")]
+        if tag
+    ]
+
+
+def _number_or_none(value: Any) -> Optional[float]:
+    try:
+        if value is None or pd.isna(value):
+            return None
+        return round(float(value), 3)
+    except (TypeError, ValueError):
+        return None
+
+
+def _daily_actuals_from_records(site: dict[str, Any], records: list[dict[str, Any]]) -> dict[str, dict[str, Any]]:
+    df = _build_history_dataframe(site, "both", "daily", records)
+    actuals: dict[str, dict[str, Any]] = {}
+
+    if df.empty:
+        return actuals
+
+    for _, row in df.iterrows():
+        day = str(row.get("fecha") or "").strip()
+        if not day:
+            continue
+
+        actuals[day] = {
+            "nivel_m": _number_or_none(row.get("nivel_m")),
+            "caudal_m3s": _number_or_none(row.get("caudal_m3s")),
+            "observed_at": day,
+        }
+
+    return actuals
+
+
+async def refresh_prediction_actuals_for_site(site_id: str) -> dict[str, Any]:
+    site = SITES_BY_ID.get(site_id)
+    if not site:
+        return {"checked": False, "error": "site_not_found"}
+
+    max_date = _today_madrid() - timedelta(days=1)
+    pending_dates = await asyncio.to_thread(
+        prediction_store.pending_actual_dates,
+        site_id,
+        max_date,
+        PREDICTION_EVAL_LOOKBACK_DAYS,
+    )
+
+    if not pending_dates:
+        return {"checked": True, "pending_dates": 0, "updated": 0}
+
+    tags = _prediction_actual_tags(site)
+    if not tags:
+        return {
+            "checked": False,
+            "pending_dates": len(pending_dates),
+            "updated": 0,
+            "error": "site_without_saih_signals",
+        }
+
+    range_start = min(pending_dates)
+    range_end = max(pending_dates)
+
+    try:
+        records = await asyncio.to_thread(fetch_saih_history, tags, range_start, range_end)
+        actuals = _daily_actuals_from_records(site, records)
+        updated = await asyncio.to_thread(prediction_store.update_actuals, site_id, actuals)
+    except Exception as e:
+        print("[PREDICTION EVAL ERROR]", site_id, repr(e))
+        return {
+            "checked": False,
+            "pending_dates": len(pending_dates),
+            "updated": 0,
+            "from": range_start.isoformat(),
+            "to": range_end.isoformat(),
+            "error": str(e),
+        }
+
+    return {
+        "checked": True,
+        "pending_dates": len(pending_dates),
+        "updated": updated,
+        "from": range_start.isoformat(),
+        "to": range_end.isoformat(),
+    }
+
+
 # ---------------------------
 # WS state
 # ---------------------------
@@ -492,8 +596,6 @@ _init_caches()
 # ---------------------------
 # HTTP routes
 # ---------------------------
-BASE_DIR = Path(__file__).resolve().parent
-
 @app.get("/")
 def home():
     return HTMLResponse((BASE_DIR / "index.html").read_text(encoding="utf-8"))
@@ -516,13 +618,12 @@ async def api_prediction_reliability(site_id: str):
     if site_id not in SITES_BY_ID:
         raise HTTPException(status_code=404, detail="site_not_found")
 
-    cached = ia_reliability_cache_by_site.get(site_id)
-    if cached:
-        return {"ok": True, "site_id": site_id, **cached}
-
-    result = await asyncio.to_thread(evaluar_fiabilidad_municipio, site_id)
+    update_result = await refresh_prediction_actuals_for_site(site_id)
+    result = await asyncio.to_thread(prediction_store.evaluation, site_id, 30)
     result["generated_at"] = datetime.now().isoformat(timespec="seconds")
-    ia_reliability_cache_by_site[site_id] = result
+    result["storage_backend"] = getattr(prediction_store, "storage_backend", "json")
+    result["update"] = update_result
+
     return {"ok": True, "site_id": site_id, **result}
 
 
@@ -1174,10 +1275,25 @@ async def refresh_ia_for_site(site_id: str, force: bool = False) -> bool:
         if pred is None:
             pred = []
 
+        stored_predictions = 0
+        site = SITES_BY_ID.get(site_id)
+
+        if site and pred:
+            try:
+                stored_predictions = await asyncio.to_thread(
+                    prediction_store.store_prediction,
+                    site,
+                    pred,
+                )
+                ia_reliability_cache_by_site.pop(site_id, None)
+            except Exception as e:
+                print("[PREDICTION STORE ERROR]", site_id, repr(e))
+
         ia_cache_by_site[site_id] = {
             "ia_refreshed_at": datetime.now().isoformat(timespec="seconds"),
             "ia_error": None,
             "pred_semana": pred,
+            "pred_semana_persistida": stored_predictions,
         }
         ia_epoch_by_site[site_id] = now_epoch
 
@@ -1458,6 +1574,17 @@ async def poll_aemet_loop():
 
         await asyncio.sleep(AEMET_CHECK_SECONDS)
 
+async def poll_prediction_evaluation_loop():
+    while True:
+        try:
+            for site in SITES:
+                await refresh_prediction_actuals_for_site(site["id"])
+        except Exception as e:
+            print("[PREDICTION EVAL LOOP ERROR]", repr(e))
+
+        await asyncio.sleep(PREDICTION_EVAL_CHECK_SECONDS)
+
+
 # async def poll_ia_loop():
 #     """
 #     Refresca la predicción IA para los sitios activos.
@@ -1528,6 +1655,7 @@ async def run_background_loop(name: str, loop_factory, startup_delay: Optional[i
 async def on_startup():
     asyncio.create_task(run_background_loop("SAIH LOOP", poll_saih_loop))
     asyncio.create_task(run_background_loop("AEMET LOOP", poll_aemet_loop))
+    asyncio.create_task(run_background_loop("PREDICTION EVAL LOOP", poll_prediction_evaluation_loop))
     #asyncio.create_task(poll_ia_loop())
     asyncio.create_task(run_background_loop("ALERTAS LOOP", poll_alertas_loop, startup_delay=0))
 

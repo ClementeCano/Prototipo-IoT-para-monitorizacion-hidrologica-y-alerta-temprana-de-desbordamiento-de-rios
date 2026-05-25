@@ -1,5 +1,6 @@
 # 🔐 Credenciales
 firebase-key.json
+app/firebase-key.json
 .env
 .env.*
 !.env.example
@@ -24,3 +25,5 @@ app/users.json
 app/users.json.tmp
 app/tokens.json
 app/tokens.json.tmp
+app/predictions.json
+app/predictions.json.tmp

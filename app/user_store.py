@@ -777,11 +777,15 @@ def _database_url_from_parts() -> Optional[str]:
     password = os.getenv("DB_PASSWORD")
     host = os.getenv("DB_HOST")
     port = os.getenv("DB_PORT", "5432")
+    default_sslmode = "require" if host and "neon.tech" in host else ""
+    sslmode = os.getenv("DB_SSLMODE", default_sslmode).strip()
 
     if not all([name, user, password, host]):
         return None
 
+    query = f"?sslmode={quote_plus(sslmode)}" if sslmode else ""
+
     return (
         f"postgresql://{quote_plus(user)}:{quote_plus(password)}"
-        f"@{host}:{port}/{quote_plus(name)}"
+        f"@{host}:{port}/{quote_plus(name)}{query}"
     )
