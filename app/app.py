@@ -252,6 +252,11 @@ IA_EXECUTOR = ProcessPoolExecutor(max_workers=IA_WORKERS) if IA_PROCESS_POOL_ENA
 HISTORY_DOWNLOAD_MAX_DAYS = int(os.getenv("HISTORY_DOWNLOAD_MAX_DAYS", "366"))
 PREDICTION_EVAL_LOOKBACK_DAYS = int(os.getenv("PREDICTION_EVAL_LOOKBACK_DAYS", "30"))
 PREDICTION_EVAL_CHECK_SECONDS = int(os.getenv("PREDICTION_EVAL_CHECK_SECONDS", "3600"))
+PREDICTION_EVAL_INCLUDE_TODAY = os.getenv("PREDICTION_EVAL_INCLUDE_TODAY", "1").lower() in {"1", "true", "yes"}
+PREDICTION_DAILY_REFRESH_ENABLED = os.getenv("PREDICTION_DAILY_REFRESH_ENABLED", "1").lower() in {"1", "true", "yes"}
+PREDICTION_DAILY_REFRESH_HOUR = int(os.getenv("PREDICTION_DAILY_REFRESH_HOUR", "6"))
+PREDICTION_DAILY_REFRESH_MINUTE = int(os.getenv("PREDICTION_DAILY_REFRESH_MINUTE", "0"))
+PREDICTION_DAILY_CHECK_SECONDS = int(os.getenv("PREDICTION_DAILY_CHECK_SECONDS", "600"))
 
 app = FastAPI()
 app.mount("/static", StaticFiles(directory=BASE_DIR), name="static")
@@ -336,11 +341,15 @@ def _filter_alert_sites(site_ids: Optional[str], allow_all: bool = False):
     return selected
 
 
-def _today_madrid() -> date:
+def _now_madrid() -> datetime:
     try:
-        return datetime.now(ZoneInfo("Europe/Madrid")).date()
+        return datetime.now(ZoneInfo(os.getenv("ALERT_TIMEZONE", "Europe/Madrid")))
     except Exception:
-        return date.today()
+        return datetime.now()
+
+
+def _today_madrid() -> date:
+    return _now_madrid().date()
 
 
 def _parse_iso_date(value: str, field_name: str) -> date:
@@ -485,12 +494,15 @@ async def refresh_prediction_actuals_for_site(site_id: str) -> dict[str, Any]:
     if not site:
         return {"checked": False, "error": "site_not_found"}
 
-    max_date = _today_madrid() - timedelta(days=1)
+    today = _today_madrid()
+    max_date = today if PREDICTION_EVAL_INCLUDE_TODAY else today - timedelta(days=1)
+    refresh_date = today if PREDICTION_EVAL_INCLUDE_TODAY else None
     pending_dates = await asyncio.to_thread(
         prediction_store.pending_actual_dates,
         site_id,
         max_date,
         PREDICTION_EVAL_LOOKBACK_DAYS,
+        refresh_date,
     )
 
     if not pending_dates:
@@ -569,6 +581,7 @@ ia_cache_by_site: Dict[str, Dict[str, Any]] = {}
 ia_inflight: set[str] = set()
 ia_epoch_by_site: Dict[str, float] = {}
 ia_reliability_cache_by_site: Dict[str, Dict[str, Any]] = {}
+daily_prediction_dates_run: set[str] = set()
 
 def _default_ia() -> Dict[str, Any]:
     return {
@@ -1585,6 +1598,37 @@ async def poll_prediction_evaluation_loop():
         await asyncio.sleep(PREDICTION_EVAL_CHECK_SECONDS)
 
 
+async def poll_daily_prediction_loop():
+    while True:
+        try:
+            if not PREDICTION_DAILY_REFRESH_ENABLED:
+                await asyncio.sleep(PREDICTION_DAILY_CHECK_SECONDS)
+                continue
+
+            now = _now_madrid()
+            today_key = now.date().isoformat()
+            scheduled = now.replace(
+                hour=PREDICTION_DAILY_REFRESH_HOUR,
+                minute=PREDICTION_DAILY_REFRESH_MINUTE,
+                second=0,
+                microsecond=0,
+            )
+
+            if now >= scheduled and today_key not in daily_prediction_dates_run:
+                print(f"[PREDICTION DAILY] Guardando predicciones D+1 para {today_key}")
+
+                for site in SITES:
+                    await refresh_ia_for_site(site["id"], force=True)
+                    await asyncio.sleep(0.5)
+
+                daily_prediction_dates_run.add(today_key)
+
+        except Exception as e:
+            print("[PREDICTION DAILY LOOP ERROR]", repr(e))
+
+        await asyncio.sleep(PREDICTION_DAILY_CHECK_SECONDS)
+
+
 # async def poll_ia_loop():
 #     """
 #     Refresca la predicción IA para los sitios activos.
@@ -1656,6 +1700,7 @@ async def on_startup():
     asyncio.create_task(run_background_loop("SAIH LOOP", poll_saih_loop))
     asyncio.create_task(run_background_loop("AEMET LOOP", poll_aemet_loop))
     asyncio.create_task(run_background_loop("PREDICTION EVAL LOOP", poll_prediction_evaluation_loop))
+    asyncio.create_task(run_background_loop("PREDICTION DAILY LOOP", poll_daily_prediction_loop))
     #asyncio.create_task(poll_ia_loop())
     asyncio.create_task(run_background_loop("ALERTAS LOOP", poll_alertas_loop, startup_delay=0))
 

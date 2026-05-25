@@ -96,7 +96,7 @@ def _prediction_rows(site: dict[str, Any], predictions: list[dict[str, Any]], is
     issued_date = _today()
     rows = []
 
-    for index, point in enumerate(predictions or [], start=1):
+    for point in predictions or []:
         if not isinstance(point, dict):
             continue
 
@@ -106,7 +106,7 @@ def _prediction_rows(site: dict[str, Any], predictions: list[dict[str, Any]], is
         if nivel_pred is None and caudal_pred is None:
             continue
 
-        target_date = issued_date + timedelta(days=index)
+        target_date = issued_date + timedelta(days=1)
         row_id = f"{site_id}:{issued_date.isoformat()}:{target_date.isoformat()}"
 
         rows.append({
@@ -116,7 +116,7 @@ def _prediction_rows(site: dict[str, Any], predictions: list[dict[str, Any]], is
             "issuedDate": issued_date.isoformat(),
             "issuedAt": now,
             "targetDate": target_date.isoformat(),
-            "horizonDay": index,
+            "horizonDay": 1,
             "nivelPred": nivel_pred,
             "caudalPred": caudal_pred,
             "nivelReal": None,
@@ -126,6 +126,7 @@ def _prediction_rows(site: dict[str, Any], predictions: list[dict[str, Any]], is
             "updatedAt": now,
             "source": "model",
         })
+        break
 
     return rows
 
@@ -222,7 +223,13 @@ class JsonPredictionStore:
             self._save_unlocked(data)
             return len(rows)
 
-    def pending_actual_dates(self, site_id: str, max_date: date, limit: int = 14) -> list[date]:
+    def pending_actual_dates(
+        self,
+        site_id: str,
+        max_date: date,
+        limit: int = 14,
+        refresh_date: Optional[date] = None,
+    ) -> list[date]:
         with self.lock:
             data = self._load_unlocked()
             dates = []
@@ -230,15 +237,23 @@ class JsonPredictionStore:
             for record in data.get("predictions", []):
                 if record.get("siteId") != site_id:
                     continue
-                needs_nivel = record.get("nivelPred") is not None and record.get("nivelReal") is None
-                needs_caudal = record.get("caudalPred") is not None and record.get("caudalReal") is None
-                if not (needs_nivel or needs_caudal):
+                if int(record.get("horizonDay") or 0) != 1:
                     continue
                 try:
                     target = date.fromisoformat(str(record.get("targetDate")))
                 except ValueError:
                     continue
-                if target <= max_date and target not in dates:
+                if target > max_date:
+                    continue
+                if refresh_date and target == refresh_date:
+                    if target not in dates:
+                        dates.append(target)
+                    continue
+                needs_nivel = record.get("nivelPred") is not None and record.get("nivelReal") is None
+                needs_caudal = record.get("caudalPred") is not None and record.get("caudalReal") is None
+                if not (needs_nivel or needs_caudal):
+                    continue
+                if target not in dates:
                     dates.append(target)
 
             return sorted(dates)[: max(1, min(int(limit or 14), 60))]
@@ -254,6 +269,8 @@ class JsonPredictionStore:
 
             for record in data.get("predictions", []):
                 if record.get("siteId") != site_id:
+                    continue
+                if int(record.get("horizonDay") or 0) != 1:
                     continue
                 actual = actuals_by_date.get(str(record.get("targetDate")))
                 if not actual:
@@ -285,7 +302,7 @@ class JsonPredictionStore:
             records = [
                 record
                 for record in data.get("predictions", [])
-                if record.get("siteId") == site_id
+                if record.get("siteId") == site_id and int(record.get("horizonDay") or 0) == 1
             ]
 
         evaluated = [
@@ -417,7 +434,13 @@ class PostgresPredictionStore:
 
         return len(rows)
 
-    def pending_actual_dates(self, site_id: str, max_date: date, limit: int = 14) -> list[date]:
+    def pending_actual_dates(
+        self,
+        site_id: str,
+        max_date: date,
+        limit: int = 14,
+        refresh_date: Optional[date] = None,
+    ) -> list[date]:
         with self._connection() as conn:
             with conn.cursor() as cur:
                 cur.execute(
@@ -425,15 +448,17 @@ class PostgresPredictionStore:
                     SELECT DISTINCT target_date
                     FROM prediction_points
                     WHERE site_id = %s
+                      AND horizon_day = 1
                       AND target_date <= %s
                       AND (
                           (nivel_pred IS NOT NULL AND nivel_real IS NULL)
                           OR (caudal_pred IS NOT NULL AND caudal_real IS NULL)
+                          OR target_date = %s
                       )
                     ORDER BY target_date ASC
                     LIMIT %s
                     """,
-                    (site_id, max_date, max(1, min(int(limit or 14), 60))),
+                    (site_id, max_date, refresh_date, max(1, min(int(limit or 14), 60))),
                 )
                 return [row[0] for row in cur.fetchall()]
 
@@ -463,6 +488,7 @@ class PostgresPredictionStore:
                             updated_at = %s
                         WHERE site_id = %s
                           AND target_date = %s
+                          AND horizon_day = 1
                         """,
                         (
                             nivel_real,
@@ -492,6 +518,7 @@ class PostgresPredictionStore:
                            ) AS pending
                     FROM prediction_points
                     WHERE site_id = %s
+                      AND horizon_day = 1
                     """,
                     (site_id,),
                 )
@@ -503,6 +530,7 @@ class PostgresPredictionStore:
                            nivel_pred, caudal_pred, nivel_real, caudal_real
                     FROM prediction_points
                     WHERE site_id = %s
+                      AND horizon_day = 1
                       AND (nivel_real IS NOT NULL OR caudal_real IS NOT NULL)
                     ORDER BY target_date DESC, issued_date DESC, horizon_day DESC
                     LIMIT %s

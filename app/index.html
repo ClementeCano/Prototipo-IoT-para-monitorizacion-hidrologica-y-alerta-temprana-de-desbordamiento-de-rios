@@ -341,6 +341,33 @@
     position: relative;
   }
 
+  .chart-loading{
+    position:absolute;
+    inset:0;
+    z-index:2;
+    display:none;
+    align-items:center;
+    justify-content:center;
+    text-align:center;
+    padding: 18px;
+    color: var(--muted);
+    font-size: 13px;
+    font-weight: 800;
+    background:
+      linear-gradient(180deg, rgba(2,6,23,.58), rgba(2,6,23,.28));
+    border-radius: 14px;
+    pointer-events:none;
+  }
+
+  .chart-loading.active{
+    display:flex;
+  }
+
+  html[data-theme="light"] .chart-loading{
+    background:
+      linear-gradient(180deg, rgba(248,250,252,.80), rgba(248,250,252,.44));
+  }
+
   .card{
     display: flex;
     flex-direction: column;
@@ -1195,6 +1222,7 @@
 
     <div class="chartwrap">
       <canvas id="predChart"></canvas>
+      <div id="predChartLoading" class="chart-loading">Generando prediccion...</div>
     </div>
 
     <div class="row reliability-head" style="justify-content: space-between;">
@@ -1209,6 +1237,7 @@
 
     <div class="chartwrap reliability-chartwrap">
       <canvas id="reliabilityChart"></canvas>
+      <div id="reliabilityChartLoading" class="chart-loading">Actualizando comparativa...</div>
     </div>
   </div>
 
@@ -1409,12 +1438,55 @@
     const reliabilityErr = document.getElementById("reliabilityErr");
     const reliabilityNivelMae = document.getElementById("reliabilityNivelMae");
     const reliabilityCaudalMae = document.getElementById("reliabilityCaudalMae");
+    const predChartLoading = document.getElementById("predChartLoading");
+    const reliabilityChartLoading = document.getElementById("reliabilityChartLoading");
     let historyFilenameEdited = false;
     let serverHistoryDownloads = [];
     let historyDownloadsLoadedFor = null;
     let reliabilityChart = null;
     let reliabilityRequestId = 0;
     let reliabilityLoadedSite = null;
+    const chartLoadingTimers = new Map();
+
+    function setChartLoading(element, active, messages = "Cargando datos") {
+      if (!element) {
+        return;
+      }
+
+      const previous = chartLoadingTimers.get(element);
+      if (previous) {
+        clearInterval(previous);
+        chartLoadingTimers.delete(element);
+      }
+
+      if (!active) {
+        element.classList.remove("active");
+        element.textContent = "";
+        return;
+      }
+
+      const queue = Array.isArray(messages) ? messages : [messages];
+      let index = 0;
+      let dots = 0;
+
+      const paint = () => {
+        dots = (dots + 1) % 4;
+        element.textContent = `${queue[index % queue.length]}${".".repeat(dots)}`;
+        if (dots === 0) {
+          index += 1;
+        }
+      };
+
+      element.classList.add("active");
+      paint();
+      chartLoadingTimers.set(element, setInterval(paint, 650));
+    }
+
+    setChartLoading(predChartLoading, true, [
+      "Preparando prediccion",
+      "Cargando modelo",
+      "Dibujando grafica"
+    ]);
 
     function togglePasswordVisibility(inputId, button) {
       const input = document.getElementById(inputId);
@@ -2809,9 +2881,17 @@
       if (limpia.length === 0) {
         // El primer payload del WebSocket puede llegar antes de que termine la IA.
         // Si ya hay una gráfica válida, la mantenemos hasta recibir datos nuevos.
+        if (!predChart) {
+          setChartLoading(predChartLoading, true, [
+            "Calculando prediccion",
+            "Esperando respuesta del modelo",
+            "Preparando datos"
+          ]);
+        }
         return;
       }
 
+      setChartLoading(predChartLoading, false);
       const labels = limpia.map((_, i) => `Día ${i+1}`);
 
       const nivel = limpia.map(p => p[0]);
@@ -2912,6 +2992,8 @@
     }
 
     function clearReliabilityChart(message = "") {
+      setChartLoading(reliabilityChartLoading, false);
+
       if (reliabilityChart) {
         reliabilityChart.destroy();
         reliabilityChart = null;
@@ -2940,13 +3022,14 @@
         const message = data?.error
           ? `No hay validacion disponible: ${data.error}`
           : data?.total > 0
-            ? "Ya hay predicciones guardadas. La comparativa se completara cuando SAIH tenga datos reales hasta ayer."
-            : "Aun no hay predicciones guardadas para comparar. Se guardaran al generar la prediccion semanal.";
+            ? "Hay predicciones D+1 guardadas. La grafica aparecera en cuanto SAIH devuelva lecturas reales del primer dia objetivo."
+            : "Aun no hay predicciones D+1 guardadas para comparar. Se guardaran automaticamente cada dia.";
         clearReliabilityChart(message);
         reliabilityErr.classList.add("info");
         return;
       }
 
+      setChartLoading(reliabilityChartLoading, false);
       reliabilityErr.classList.remove("info");
       reliabilityErr.style.display = "none";
       reliabilityErr.textContent = "";
@@ -3063,6 +3146,11 @@
 
       const requestId = ++reliabilityRequestId;
       clearReliabilityChart();
+      setChartLoading(reliabilityChartLoading, true, [
+        "Buscando predicciones D+1",
+        "Consultando valores reales SAIH",
+        "Calculando error medio"
+      ]);
       reliabilityErr.classList.add("info");
       reliabilityErr.style.display = "block";
       reliabilityErr.textContent = "Actualizando comparativa con datos reales de SAIH...";
@@ -3085,6 +3173,7 @@
       iaRef.textContent = window._lastIaRef ?? "-";
 
       if (error) {
+        setChartLoading(predChartLoading, false);
         iaErr.style.display = "block";
         iaErr.textContent = `Error IA: ${error}`;
         iaState.textContent = "Error";
@@ -3109,7 +3198,7 @@
           iaState.textContent = "Disponible";
         }
       } else {
-        iaState.textContent = "Sin datos";
+        iaState.textContent = predChart ? "Sin datos" : "Calculando";
       }
     }
 
