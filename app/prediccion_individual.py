@@ -2,9 +2,13 @@ from pathlib import Path
 import pickle
 from datetime import date, timedelta
 import os
+import time
 
 import numpy as np
 import pandas as pd
+
+os.environ.setdefault("CUDA_VISIBLE_DEVICES", "-1")
+os.environ.setdefault("TF_CPP_MIN_LOG_LEVEL", "2")
 
 try:
     from app.api.saih_opendata import fetch_saih_history
@@ -19,9 +23,13 @@ print(f"BASE_DIR: {BASE_DIR}")
 
 VENTANA = 14
 HORIZONTE = 7
-LIVE_SAIH_LOOKBACK_DAYS = int(os.getenv("PREDICTION_LIVE_SAIH_LOOKBACK_DAYS", "45"))
+LIVE_SAIH_LOOKBACK_DAYS = int(os.getenv("PREDICTION_LIVE_SAIH_LOOKBACK_DAYS", "21"))
+LIVE_SAIH_CACHE_SECONDS = int(os.getenv("PREDICTION_LIVE_SAIH_CACHE_SECONDS", "1800"))
 USE_LIVE_SAIH_WINDOW = os.getenv("PREDICTION_USE_LIVE_SAIH", "1").lower() in {"1", "true", "yes"}
 SITES_BY_ID = {site["id"]: site for site in SITES}
+_ARTIFACT_CACHE = {}
+_DATASET_CACHE = {}
+_LIVE_WINDOW_CACHE = {}
 
 
 def _none_if_invalid(value):
@@ -34,6 +42,10 @@ def _none_if_invalid(value):
 
 
 def _load_prediction_artifacts(site_id: str):
+    cached = _ARTIFACT_CACHE.get(site_id)
+    if cached is not None:
+        return cached
+
     carpeta = BASE_DIR / "modelos_municipios" / site_id
 
     modelo_path = carpeta / "modelo.keras"
@@ -48,23 +60,31 @@ def _load_prediction_artifacts(site_id: str):
 
     from tensorflow.keras.models import load_model
 
-    return {
+    artifacts = {
         "modelo": load_model(modelo_path, compile=False),
         "scaler_X": pickle.load(open(scaler_x_path, "rb")),
         "scaler_nivel": pickle.load(open(scaler_nivel_path, "rb")),
         "scaler_caudal": pickle.load(open(scaler_caudal_path, "rb")),
         "features": pickle.load(open(features_path, "rb")),
     }
+    _ARTIFACT_CACHE[site_id] = artifacts
+    return artifacts
 
 
 def _load_site_dataset(site_id: str):
+    cached = _DATASET_CACHE.get(site_id)
+    if cached is not None:
+        return cached.copy()
+
     dataset_path = BASE_DIR / "datasets_modelo_municipios" / f"{site_id}.csv"
 
     if not dataset_path.exists():
         print(f"Dataset no encontrado para {site_id}")
         return None
 
-    return pd.read_csv(dataset_path).dropna().reset_index(drop=True)
+    df = pd.read_csv(dataset_path).dropna().reset_index(drop=True)
+    _DATASET_CACHE[site_id] = df
+    return df.copy()
 
 
 def _add_model_features(df: pd.DataFrame) -> pd.DataFrame:
@@ -140,9 +160,16 @@ def _records_to_daily_dataset(site_id: str, records: list[dict]) -> pd.DataFrame
     return daily[["fecha", "nivel_m", "caudal_m3s", "lluvia_mm", "desbordamiento"]]
 
 
-def _load_live_prediction_window(site_id: str, base_df: pd.DataFrame) -> pd.DataFrame:
-    if not USE_LIVE_SAIH_WINDOW:
+def _load_live_prediction_window(site_id: str, base_df: pd.DataFrame, use_live_saih: bool | None = None) -> pd.DataFrame:
+    use_live = USE_LIVE_SAIH_WINDOW if use_live_saih is None else bool(use_live_saih)
+
+    if not use_live:
         return base_df
+
+    cached = _LIVE_WINDOW_CACHE.get(site_id)
+    now = time.time()
+    if cached and (now - cached["epoch"]) < LIVE_SAIH_CACHE_SECONDS:
+        return cached["df"].copy()
 
     site = SITES_BY_ID.get(site_id)
     if not site:
@@ -182,7 +209,8 @@ def _load_live_prediction_window(site_id: str, base_df: pd.DataFrame) -> pd.Data
         return base_df
 
     print(f"IA {site_id}: usando ventana SAIH reciente hasta {combined['fecha'].iloc[-1]}")
-    return combined
+    _LIVE_WINDOW_CACHE[site_id] = {"epoch": now, "df": combined}
+    return combined.copy()
 
 
 def _predict_from_window(artifacts, window_df: pd.DataFrame):
@@ -206,7 +234,7 @@ def _predict_from_window(artifacts, window_df: pd.DataFrame):
     return pred_nivel, pred_caudal
 
 
-def predecir_semana_municipio(site_id: str):
+def predecir_semana_municipio(site_id: str, use_live_saih: bool | None = None):
     try:
         artifacts = _load_prediction_artifacts(site_id)
 
@@ -219,7 +247,7 @@ def predecir_semana_municipio(site_id: str):
             return []
 
         df = _add_model_features(df)
-        df = _load_live_prediction_window(site_id, df)
+        df = _load_live_prediction_window(site_id, df, use_live_saih=use_live_saih)
 
         if len(df) < VENTANA:
             print(f"Muy pocos datos en {site_id}")

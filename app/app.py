@@ -258,6 +258,7 @@ PREDICTION_DAILY_REFRESH_ENABLED = os.getenv("PREDICTION_DAILY_REFRESH_ENABLED",
 PREDICTION_DAILY_REFRESH_HOUR = int(os.getenv("PREDICTION_DAILY_REFRESH_HOUR", "6"))
 PREDICTION_DAILY_REFRESH_MINUTE = int(os.getenv("PREDICTION_DAILY_REFRESH_MINUTE", "0"))
 PREDICTION_DAILY_CHECK_SECONDS = int(os.getenv("PREDICTION_DAILY_CHECK_SECONDS", "600"))
+PREDICTION_DAILY_STARTUP_GRACE_SECONDS = int(os.getenv("PREDICTION_DAILY_STARTUP_GRACE_SECONDS", "1800"))
 
 app = FastAPI()
 app.mount("/static", StaticFiles(directory=BASE_DIR), name="static")
@@ -1315,12 +1316,12 @@ def _chunk(lst: list[str], n: int) -> list[list[str]]:
     return [lst[i:i+n] for i in range(0, len(lst), n)]
 
 
-async def _run_prediction(site_id: str):
+async def _run_prediction(site_id: str, use_live_saih: bool = False):
     if IA_EXECUTOR is not None:
         loop = asyncio.get_running_loop()
-        return await loop.run_in_executor(IA_EXECUTOR, predecir_semana_municipio, site_id)
+        return await loop.run_in_executor(IA_EXECUTOR, predecir_semana_municipio, site_id, use_live_saih)
 
-    return await asyncio.to_thread(predecir_semana_municipio, site_id)
+    return await asyncio.to_thread(predecir_semana_municipio, site_id, use_live_saih)
 
 
 async def refresh_ia_for_site(site_id: str, force: bool = False) -> bool:
@@ -1339,7 +1340,7 @@ async def refresh_ia_for_site(site_id: str, force: bool = False) -> bool:
     print("🚀 IA para:", site_id)
 
     try:
-        pred = await _run_prediction(site_id)
+        pred = await _run_prediction(site_id, use_live_saih=force)
 
         if pred is None:
             pred = []
@@ -1490,14 +1491,6 @@ async def ws(websocket: WebSocket):
 
         # Envío inmediato al conectar
         await websocket.send_text(json.dumps(_build_payload(default_site, forced_is_new=True), ensure_ascii=False))
-
-        # Refrescos inmediatos en background
-        async def _refresh_default():
-            updated_aemet = await refresh_aemet_for_site(default_site, force=False)
-            updated_ia = await refresh_ia_for_site(default_site) if IA_REFRESH_ON_WS else False
-            if (updated_aemet or updated_ia) and websocket in clients and ws_site.get(websocket) == default_site:
-                await websocket.send_text(json.dumps(_build_payload(default_site, forced_is_new=True), ensure_ascii=False))
-        asyncio.create_task(_refresh_default())
 
     try:
         while True:
@@ -1685,6 +1678,8 @@ async def poll_prediction_evaluation_loop():
 
 
 async def poll_daily_prediction_loop():
+    startup_checked = False
+
     while True:
         try:
             if not PREDICTION_DAILY_REFRESH_ENABLED:
@@ -1699,6 +1694,17 @@ async def poll_daily_prediction_loop():
                 second=0,
                 microsecond=0,
             )
+
+            if not startup_checked:
+                startup_checked = True
+                startup_limit = scheduled + timedelta(seconds=PREDICTION_DAILY_STARTUP_GRACE_SECONDS)
+
+                if now > startup_limit:
+                    daily_prediction_dates_run.add(today_key)
+                    print(
+                        "[PREDICTION DAILY] Saltando batch inicial tras arranque tardio "
+                        f"({today_key}); se ejecutara en la proxima ventana programada."
+                    )
 
             if now >= scheduled and today_key not in daily_prediction_dates_run:
                 print(f"[PREDICTION DAILY] Guardando predicciones D+1 para {today_key}")
