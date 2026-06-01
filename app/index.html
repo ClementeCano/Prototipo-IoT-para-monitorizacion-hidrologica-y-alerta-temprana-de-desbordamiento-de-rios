@@ -2757,6 +2757,9 @@
     }
 
     function toNum(value) {
+      if (value === null || value === undefined || value === "") {
+        return null;
+      }
       const n = Number(value);
       return Number.isFinite(n) ? n : null;
     }
@@ -3101,12 +3104,10 @@
             {
               label: "Nivel predicho (m)",
               data: points.map(point => point.nivel_pred),
-              showLine: false,
-              borderWidth: 0,
-              pointRadius: 7,
-              pointHoverRadius: 9,
-              pointStyle: "rectRot",
-              pointBackgroundColor: "#38bdf8",
+              borderWidth: 2,
+              borderDash: [7, 5],
+              tension: 0.25,
+              pointRadius: 4,
               borderColor: "#38bdf8",
               yAxisID: "yNivel"
             },
@@ -3122,12 +3123,10 @@
             {
               label: "Caudal predicho (m³/s)",
               data: points.map(point => point.caudal_pred),
-              showLine: false,
-              borderWidth: 0,
-              pointRadius: 7,
-              pointHoverRadius: 9,
-              pointStyle: "rectRot",
-              pointBackgroundColor: "#a78bfa",
+              borderWidth: 2,
+              borderDash: [7, 5],
+              tension: 0.25,
+              pointRadius: 4,
               borderColor: "#a78bfa",
               yAxisID: "yCaudal"
             }

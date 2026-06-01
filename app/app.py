@@ -242,6 +242,7 @@ POLL_SECONDS = 20
 AEMET_REFRESH_SECONDS = 1800
 AEMET_CHECK_SECONDS = 60
 AEMET_ERROR_RETRY_SECONDS = int(os.getenv("AEMET_ERROR_RETRY_SECONDS", "300"))
+SAIH_STALE_HOURS = int(os.getenv("SAIH_STALE_HOURS", "72"))
 ALERT_CHECK_SECONDS = max(1, int(os.getenv("ALERT_CHECK_SECONDS", "5")))
 STARTUP_BACKGROUND_DELAY_SECONDS = int(os.getenv("STARTUP_BACKGROUND_DELAY_SECONDS", "30"))
 IA_REFRESH_SECONDS = int(os.getenv("IA_REFRESH_SECONDS", "3600"))
@@ -489,6 +490,38 @@ def _daily_actuals_from_records(site: dict[str, Any], records: list[dict[str, An
         }
 
     return actuals
+
+
+def _parse_saih_timestamp(value: Any) -> Optional[datetime]:
+    if not value:
+        return None
+
+    parsed = pd.to_datetime(value, errors="coerce")
+    if pd.isna(parsed):
+        return None
+
+    try:
+        return parsed.to_pydatetime().replace(tzinfo=None)
+    except Exception:
+        return None
+
+
+def _saih_signal_issue(signal: dict[str, Any], name: str) -> Optional[str]:
+    if not signal:
+        return f"{name} sin respuesta"
+
+    if signal.get("valor") is None:
+        return f"{name} sin valor publicado"
+
+    timestamp = _parse_saih_timestamp(signal.get("fecha"))
+    if not timestamp:
+        return f"{name} sin fecha valida"
+
+    age_hours = (datetime.now() - timestamp).total_seconds() / 3600
+    if SAIH_STALE_HOURS > 0 and age_hours > SAIH_STALE_HOURS:
+        return f"{name} desactualizado desde {signal.get('fecha')}"
+
+    return None
 
 
 async def refresh_prediction_actuals_for_site(site_id: str) -> dict[str, Any]:
@@ -1511,9 +1544,18 @@ async def ws(websocket: WebSocket):
 
                     # 2) refrescos inmediatos
                     async def _refresh_and_push(site_id: str):
+                        updated_saih = await refresh_saih_for_site(site_id)
+                        if updated_saih:
+                            if websocket in clients and ws_site.get(websocket) == site_id:
+                                await websocket.send_text(json.dumps(_build_payload(site_id, forced_is_new=True), ensure_ascii=False))
+
                         updated_aemet = await refresh_aemet_for_site(site_id, force=False)
+                        if updated_aemet:
+                            if websocket in clients and ws_site.get(websocket) == site_id:
+                                await websocket.send_text(json.dumps(_build_payload(site_id, forced_is_new=True), ensure_ascii=False))
+
                         updated_ia = await refresh_ia_for_site(site_id) if IA_REFRESH_ON_WS else False
-                        if updated_aemet or updated_ia:
+                        if updated_ia:
                             if websocket in clients and ws_site.get(websocket) == site_id:
                                 await websocket.send_text(json.dumps(_build_payload(site_id, forced_is_new=True), ensure_ascii=False))
                     asyncio.create_task(_refresh_and_push(sid))
@@ -1529,6 +1571,91 @@ async def ws(websocket: WebSocket):
 # ---------------------------
 # Loops
 # ---------------------------
+def _update_saih_cache_for_site(
+    site: dict[str, Any],
+    all_signals: dict[str, dict[str, Any]],
+    batch_errors: Optional[list[str]] = None,
+) -> None:
+    sid = site["id"]
+    nivel_tag = (site.get("saih") or {}).get("nivel", "") or ""
+    caudal_tag = (site.get("saih") or {}).get("caudal", "") or ""
+
+    nivel = all_signals.get(nivel_tag, {}) if nivel_tag else {}
+    caudal = all_signals.get(caudal_tag, {}) if caudal_tag else {}
+
+    prev = saih_cache_by_site.get(sid, {})
+    missing_signals = []
+    nivel_issue = _saih_signal_issue(nivel, "nivel") if nivel_tag else None
+    caudal_issue = _saih_signal_issue(caudal, "caudal") if caudal_tag else None
+    valid_nivel = bool(nivel) and nivel_issue is None
+    valid_caudal = bool(caudal) and caudal_issue is None
+    ts = (
+        (nivel.get("fecha") if valid_nivel else None)
+        or (caudal.get("fecha") if valid_caudal else None)
+    )
+
+    if nivel_issue:
+        missing_signals.append(nivel_issue)
+    if caudal_issue:
+        missing_signals.append(caudal_issue)
+
+    if not nivel_tag and not caudal_tag:
+        saih_error = "Este municipio no tiene senales SAIH configuradas."
+        saih_error_detail = "site_without_saih_signals"
+    elif missing_signals:
+        saih_error = (
+            "SAIH Ebro no esta devolviendo datos validos para este municipio. "
+            "No es un fallo de la web."
+        )
+        saih_error_detail = "; ".join([*missing_signals, *(batch_errors or [])])
+    else:
+        saih_error = None
+        saih_error_detail = None
+
+    saih_cache_by_site[sid] = {
+        "ts": ts or prev.get("ts"),
+        "nivel_m": (nivel.get("valor") if valid_nivel else prev.get("nivel_m")),
+        "caudal_m3s": (caudal.get("valor") if valid_caudal else prev.get("caudal_m3s")),
+        "tendencia_nivel": (nivel.get("tendencia") if valid_nivel else prev.get("tendencia_nivel")),
+        "tendencia_caudal": (caudal.get("tendencia") if valid_caudal else prev.get("tendencia_caudal")),
+        "saih_error": saih_error,
+        "saih_error_detail": saih_error_detail,
+    }
+
+
+async def refresh_saih_for_site(site_id: str) -> bool:
+    site = SITES_BY_ID.get(site_id)
+    if not site:
+        return False
+
+    tags = [
+        tag
+        for tag in [
+            (site.get("saih") or {}).get("nivel"),
+            (site.get("saih") or {}).get("caudal"),
+        ]
+        if tag
+    ]
+
+    if not tags:
+        _update_saih_cache_for_site(site, {}, [])
+        return True
+
+    try:
+        signals = await asyncio.to_thread(fetch_saih_signals, tags)
+        _update_saih_cache_for_site(site, signals, [])
+    except Exception as e:
+        print("[SAIH SITE ERROR]", site_id, repr(e))
+        prev = saih_cache_by_site.get(site_id, {})
+        saih_cache_by_site[site_id] = {
+            **prev,
+            "saih_error": "SAIH Ebro no esta respondiendo ahora mismo. No es un fallo de la web.",
+            "saih_error_detail": str(e),
+        }
+
+    return True
+
+
 async def _refresh_saih_cache_once():
     """
     Prefetch global, pero en BATCHES para evitar URL gigante y timeouts.
@@ -1559,44 +1686,7 @@ async def _refresh_saih_cache_once():
             await asyncio.sleep(0.2)
 
         for s in SITES:
-            sid = s["id"]
-            nivel_tag = (s.get("saih") or {}).get("nivel", "") or ""
-            caudal_tag = (s.get("saih") or {}).get("caudal", "") or ""
-
-            nivel = all_signals.get(nivel_tag, {}) if nivel_tag else {}
-            caudal = all_signals.get(caudal_tag, {}) if caudal_tag else {}
-
-            ts = (nivel.get("fecha") or caudal.get("fecha")) if (nivel or caudal) else None
-            prev = saih_cache_by_site.get(sid, {})
-            missing_signals = []
-
-            if nivel_tag and not nivel:
-                missing_signals.append("nivel")
-            if caudal_tag and not caudal:
-                missing_signals.append("caudal")
-
-            if not nivel_tag and not caudal_tag:
-                saih_error = "Este municipio no tiene senales SAIH configuradas."
-                saih_error_detail = "site_without_saih_signals"
-            elif missing_signals:
-                saih_error = (
-                    "SAIH Ebro no esta devolviendo datos actualizados para "
-                    f"{', '.join(missing_signals)} en este municipio. No es un fallo de la web."
-                )
-                saih_error_detail = "; ".join(batch_errors) if batch_errors else "signals_without_data"
-            else:
-                saih_error = None
-                saih_error_detail = None
-
-            saih_cache_by_site[sid] = {
-                "ts": ts or prev.get("ts"),
-                "nivel_m": (nivel.get("valor") if nivel else prev.get("nivel_m")),
-                "caudal_m3s": (caudal.get("valor") if caudal else prev.get("caudal_m3s")),
-                "tendencia_nivel": (nivel.get("tendencia") if nivel else prev.get("tendencia_nivel")),
-                "tendencia_caudal": (caudal.get("tendencia") if caudal else prev.get("tendencia_caudal")),
-                "saih_error": saih_error,
-                "saih_error_detail": saih_error_detail,
-            }
+            _update_saih_cache_for_site(s, all_signals, batch_errors)
 
     except Exception as e:
         print("[SAIH ERROR]", repr(e))

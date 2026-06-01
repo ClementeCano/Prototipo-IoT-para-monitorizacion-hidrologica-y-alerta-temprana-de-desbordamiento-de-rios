@@ -30,6 +30,7 @@ primary_region = 'cdg'
   PREDICTION_LIVE_SAIH_CACHE_SECONDS = "1800"
   MIGRATE_USERS_JSON_ON_START = "1"
   SAIH_SSL_MODE = "auto"
+  SAIH_STALE_HOURS = "72"
   PUBLIC_BASE_URL = "https://dashboard-ebro.fly.dev"
   ALERT_HOUR = "12"
   ALERT_MINUTE = "17"
