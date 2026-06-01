@@ -1138,6 +1138,8 @@
           </div>
         </div>
 
+        <div id="saihErr" class="err"></div>
+
         <div style="margin-top:14px;">
           <div class="label">Estado</div>
           <div class="pill">
@@ -1358,6 +1360,7 @@
 
     const estadoDot = document.getElementById("estadoDot");
     const estadoTxt = document.getElementById("estadoTxt");
+    const saihErr = document.getElementById("saihErr");
 
     const aemetRef = document.getElementById("aemetRef");
     const aemetErr = document.getElementById("aemetErr");
@@ -1735,15 +1738,37 @@
       initHistoryForm();
     }
 
-    function setHistoryError(message) {
+    function setHistoryError(message, type = "error") {
       if (!message) {
         historyErr.style.display = "none";
         historyErr.textContent = "";
+        historyErr.classList.remove("info");
         return;
       }
 
+      historyErr.classList.toggle("info", type === "info");
       historyErr.style.display = "block";
       historyErr.textContent = message;
+    }
+
+    function historyDownloadErrorMessage(errorData, status) {
+      if (errorData?.message) {
+        return errorData.message;
+      }
+
+      if (errorData?.error === "saih_history_error") {
+        return "La API de SAIH Ebro no ha respondido correctamente. No es un fallo de la web; prueba mas tarde o cambia el tramo de fechas.";
+      }
+
+      if (errorData?.error === "history_without_data") {
+        return "SAIH Ebro no tiene datos publicados para ese municipio, variable o tramo de fechas. No es un fallo de la web.";
+      }
+
+      if (errorData?.error === "site_without_requested_signals") {
+        return "Ese municipio no tiene senales SAIH para el dato solicitado. No es un fallo de la web.";
+      }
+
+      return errorData?.error || `HTTP ${status}`;
     }
 
     function filenameFromDisposition(disposition, fallback) {
@@ -2425,10 +2450,11 @@
 
         if (!response.ok) {
           const errorData = await response.json().catch(() => ({}));
-          throw new Error(errorData.message || errorData.error || `HTTP ${response.status}`);
+          throw new Error(historyDownloadErrorMessage(errorData, response.status));
         }
 
         const blob = await response.blob();
+        const historyWarning = response.headers.get("X-History-Warning");
         const savedFilename = saveHandle?.name || selectedFilename;
 
         if (saveHandle) {
@@ -2464,6 +2490,10 @@
           hasLocalHandle: handleSaved,
           savedWithPicker: Boolean(saveHandle)
         });
+
+        if (historyWarning) {
+          setHistoryError(historyWarning, "info");
+        }
 
       } catch (err) {
         console.error("Error descargando historico:", err);
@@ -3030,15 +3060,23 @@
       }
 
       setChartLoading(reliabilityChartLoading, false);
-      reliabilityErr.classList.remove("info");
-      reliabilityErr.style.display = "none";
-      reliabilityErr.textContent = "";
+      if (data.update?.error) {
+        reliabilityErr.classList.add("info");
+        reliabilityErr.style.display = "block";
+        reliabilityErr.textContent = "Mostrando la comparativa guardada. SAIH Ebro no ha podido actualizar ahora mismo; no es un fallo de la web.";
+        reliabilityErr.title = data.update.error;
+      } else {
+        reliabilityErr.classList.remove("info");
+        reliabilityErr.style.display = "none";
+        reliabilityErr.textContent = "";
+        reliabilityErr.title = "";
+      }
       reliabilityNivelMae.textContent = data.metrics?.nivel_mae ?? "-";
       reliabilityCaudalMae.textContent = data.metrics?.caudal_mae ?? "-";
 
       const labels = points.map(point => {
         const day = point.target_date || point.date || "-";
-        return point.horizon_day ? `${day} (D+${point.horizon_day})` : day;
+        return day;
       });
       const chartTextColor = getChartTextColor();
 
@@ -3063,10 +3101,12 @@
             {
               label: "Nivel predicho (m)",
               data: points.map(point => point.nivel_pred),
-              borderWidth: 2,
-              borderDash: [7, 5],
-              tension: 0.25,
-              pointRadius: 4,
+              showLine: false,
+              borderWidth: 0,
+              pointRadius: 7,
+              pointHoverRadius: 9,
+              pointStyle: "rectRot",
+              pointBackgroundColor: "#38bdf8",
               borderColor: "#38bdf8",
               yAxisID: "yNivel"
             },
@@ -3082,10 +3122,12 @@
             {
               label: "Caudal predicho (m³/s)",
               data: points.map(point => point.caudal_pred),
-              borderWidth: 2,
-              borderDash: [7, 5],
-              tension: 0.25,
-              pointRadius: 4,
+              showLine: false,
+              borderWidth: 0,
+              pointRadius: 7,
+              pointHoverRadius: 9,
+              pointStyle: "rectRot",
+              pointBackgroundColor: "#a78bfa",
               borderColor: "#a78bfa",
               yAxisID: "yCaudal"
             }
@@ -3340,6 +3382,19 @@
         tcEl.textContent = data.tendencia_caudal ?? "-";
 
         setEstadoRio(nivel);
+
+        const saihError = data.saih_error ?? "";
+        if (saihError) {
+          saihErr.classList.add("info");
+          saihErr.style.display = "block";
+          saihErr.textContent = saihError;
+          saihErr.title = data.saih_error_detail ?? "";
+        } else {
+          saihErr.classList.remove("info");
+          saihErr.style.display = "none";
+          saihErr.textContent = "";
+          saihErr.title = "";
+        }
 
         aemetRef.textContent = data.aemet_refreshed_at ?? "-";
 

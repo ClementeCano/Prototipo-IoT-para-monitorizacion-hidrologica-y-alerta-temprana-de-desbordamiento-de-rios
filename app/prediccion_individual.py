@@ -1,8 +1,17 @@
 from pathlib import Path
 import pickle
+from datetime import date, timedelta
+import os
 
 import numpy as np
 import pandas as pd
+
+try:
+    from app.api.saih_opendata import fetch_saih_history
+    from app.core.config import SITES
+except ImportError:
+    from api.saih_opendata import fetch_saih_history
+    from core.config import SITES
 
 
 BASE_DIR = Path(__file__).resolve().parent
@@ -10,6 +19,9 @@ print(f"BASE_DIR: {BASE_DIR}")
 
 VENTANA = 14
 HORIZONTE = 7
+LIVE_SAIH_LOOKBACK_DAYS = int(os.getenv("PREDICTION_LIVE_SAIH_LOOKBACK_DAYS", "45"))
+USE_LIVE_SAIH_WINDOW = os.getenv("PREDICTION_USE_LIVE_SAIH", "1").lower() in {"1", "true", "yes"}
+SITES_BY_ID = {site["id"]: site for site in SITES}
 
 
 def _none_if_invalid(value):
@@ -55,6 +67,124 @@ def _load_site_dataset(site_id: str):
     return pd.read_csv(dataset_path).dropna().reset_index(drop=True)
 
 
+def _add_model_features(df: pd.DataFrame) -> pd.DataFrame:
+    df = df.copy()
+    df["nivel_m"] = pd.to_numeric(df.get("nivel_m"), errors="coerce")
+    df["caudal_m3s"] = pd.to_numeric(df.get("caudal_m3s"), errors="coerce")
+    df["lluvia_mm"] = (
+        pd.to_numeric(df["lluvia_mm"], errors="coerce").fillna(0)
+        if "lluvia_mm" in df.columns
+        else pd.Series(0.0, index=df.index)
+    )
+    df["desbordamiento"] = (
+        pd.to_numeric(df["desbordamiento"], errors="coerce").fillna(0)
+        if "desbordamiento" in df.columns
+        else pd.Series(0, index=df.index)
+    )
+    df["caudal_log"] = np.log1p(df["caudal_m3s"].clip(lower=0))
+    df["nivel_lag1"] = df["nivel_m"].shift(1)
+    df["caudal_lag1"] = df["caudal_log"].shift(1)
+    df["lluvia_3d"] = df["lluvia_mm"].rolling(3, min_periods=1).sum()
+    df["lluvia_7d"] = df["lluvia_mm"].rolling(7, min_periods=1).sum()
+    df["nivel_diff"] = df["nivel_m"].diff()
+    df["caudal_diff"] = df["caudal_m3s"].diff()
+    df["nivel_media_3"] = df["nivel_m"].rolling(3, min_periods=1).mean()
+    return df
+
+
+def _records_to_daily_dataset(site_id: str, records: list[dict]) -> pd.DataFrame:
+    site = SITES_BY_ID.get(site_id) or {}
+    saih = site.get("saih") or {}
+    signal_to_column = {
+        saih.get("nivel"): "nivel_m",
+        saih.get("caudal"): "caudal_m3s",
+    }
+    rows_by_ts = {}
+
+    for record in records:
+        column = signal_to_column.get(record.get("senal"))
+        timestamp = record.get("fecha")
+
+        if not column or not timestamp:
+            continue
+
+        row = rows_by_ts.setdefault(timestamp, {"fecha": timestamp})
+        row[column] = record.get("valor")
+
+    df = pd.DataFrame(rows_by_ts.values())
+    if df.empty:
+        return df
+
+    df["fecha_dt"] = pd.to_datetime(df["fecha"], errors="coerce")
+    df = df.dropna(subset=["fecha_dt"]).sort_values("fecha_dt")
+
+    for column in ["nivel_m", "caudal_m3s"]:
+        if column not in df.columns:
+            df[column] = np.nan
+        df[column] = pd.to_numeric(df[column], errors="coerce")
+
+    daily = (
+        df.set_index("fecha_dt")[["nivel_m", "caudal_m3s"]]
+        .resample("D")
+        .mean()
+        .dropna(how="any")
+        .reset_index()
+    )
+
+    if daily.empty:
+        return daily
+
+    daily["fecha"] = daily["fecha_dt"].dt.strftime("%Y-%m-%d")
+    daily["lluvia_mm"] = 0.0
+    daily["desbordamiento"] = 0
+    return daily[["fecha", "nivel_m", "caudal_m3s", "lluvia_mm", "desbordamiento"]]
+
+
+def _load_live_prediction_window(site_id: str, base_df: pd.DataFrame) -> pd.DataFrame:
+    if not USE_LIVE_SAIH_WINDOW:
+        return base_df
+
+    site = SITES_BY_ID.get(site_id)
+    if not site:
+        return base_df
+
+    saih = site.get("saih") or {}
+    tags = [tag for tag in [saih.get("nivel"), saih.get("caudal")] if tag]
+    if len(tags) < 2:
+        return base_df
+
+    end_date = date.today()
+    start_date = end_date - timedelta(days=max(LIVE_SAIH_LOOKBACK_DAYS, VENTANA + 7))
+
+    try:
+        records = fetch_saih_history(tags, start_date, end_date)
+        live_df = _records_to_daily_dataset(site_id, records)
+    except Exception as exc:
+        print(f"SAIH no disponible para ventana IA {site_id}: {exc}")
+        return base_df
+
+    if live_df.empty or len(live_df) < VENTANA:
+        return base_df
+
+    base_min = base_df[["fecha", "nivel_m", "caudal_m3s", "lluvia_mm", "desbordamiento"]].copy()
+    combined = pd.concat([base_min.tail(VENTANA + 7), live_df], ignore_index=True)
+    combined["fecha_dt"] = pd.to_datetime(combined["fecha"], errors="coerce")
+    combined = (
+        combined.dropna(subset=["fecha_dt"])
+        .sort_values("fecha_dt")
+        .drop_duplicates(subset=["fecha"], keep="last")
+        .reset_index(drop=True)
+    )
+    combined = _add_model_features(combined)
+    combined = combined.dropna().reset_index(drop=True)
+
+    if len(combined) < VENTANA:
+        return base_df
+
+    print(f"IA {site_id}: usando ventana SAIH reciente hasta {combined['fecha'].iloc[-1]}")
+    return combined
+
+
 def _predict_from_window(artifacts, window_df: pd.DataFrame):
     x_df = window_df.copy()
 
@@ -87,6 +217,9 @@ def predecir_semana_municipio(site_id: str):
 
         if df is None:
             return []
+
+        df = _add_model_features(df)
+        df = _load_live_prediction_window(site_id, df)
 
         if len(df) < VENTANA:
             print(f"Muy pocos datos en {site_id}")

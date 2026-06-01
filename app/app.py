@@ -253,6 +253,7 @@ HISTORY_DOWNLOAD_MAX_DAYS = int(os.getenv("HISTORY_DOWNLOAD_MAX_DAYS", "366"))
 PREDICTION_EVAL_LOOKBACK_DAYS = int(os.getenv("PREDICTION_EVAL_LOOKBACK_DAYS", "30"))
 PREDICTION_EVAL_CHECK_SECONDS = int(os.getenv("PREDICTION_EVAL_CHECK_SECONDS", "3600"))
 PREDICTION_EVAL_INCLUDE_TODAY = os.getenv("PREDICTION_EVAL_INCLUDE_TODAY", "1").lower() in {"1", "true", "yes"}
+PREDICTION_EVAL_MIN_REFRESH_SECONDS = int(os.getenv("PREDICTION_EVAL_MIN_REFRESH_SECONDS", "600"))
 PREDICTION_DAILY_REFRESH_ENABLED = os.getenv("PREDICTION_DAILY_REFRESH_ENABLED", "1").lower() in {"1", "true", "yes"}
 PREDICTION_DAILY_REFRESH_HOUR = int(os.getenv("PREDICTION_DAILY_REFRESH_HOUR", "6"))
 PREDICTION_DAILY_REFRESH_MINUTE = int(os.getenv("PREDICTION_DAILY_REFRESH_MINUTE", "0"))
@@ -508,6 +509,22 @@ async def refresh_prediction_actuals_for_site(site_id: str) -> dict[str, Any]:
     if not pending_dates:
         return {"checked": True, "pending_dates": 0, "updated": 0}
 
+    now_epoch = datetime.now().timestamp()
+    last_epoch = prediction_actual_refresh_epoch_by_site.get(site_id)
+
+    if (
+        last_epoch is not None
+        and PREDICTION_EVAL_MIN_REFRESH_SECONDS > 0
+        and (now_epoch - last_epoch) < PREDICTION_EVAL_MIN_REFRESH_SECONDS
+    ):
+        return {
+            "checked": True,
+            "pending_dates": len(pending_dates),
+            "updated": 0,
+            "skipped": "recently_checked",
+            "next_check_seconds": round(PREDICTION_EVAL_MIN_REFRESH_SECONDS - (now_epoch - last_epoch)),
+        }
+
     tags = _prediction_actual_tags(site)
     if not tags:
         return {
@@ -521,6 +538,7 @@ async def refresh_prediction_actuals_for_site(site_id: str) -> dict[str, Any]:
     range_end = max(pending_dates)
 
     try:
+        prediction_actual_refresh_epoch_by_site[site_id] = now_epoch
         records = await asyncio.to_thread(fetch_saih_history, tags, range_start, range_end)
         actuals = _daily_actuals_from_records(site, records)
         updated = await asyncio.to_thread(prediction_store.update_actuals, site_id, actuals)
@@ -582,6 +600,7 @@ ia_inflight: set[str] = set()
 ia_epoch_by_site: Dict[str, float] = {}
 ia_reliability_cache_by_site: Dict[str, Dict[str, Any]] = {}
 daily_prediction_dates_run: set[str] = set()
+prediction_actual_refresh_epoch_by_site: Dict[str, float] = {}
 
 def _default_ia() -> Dict[str, Any]:
     return {
@@ -599,6 +618,8 @@ def _init_caches():
             "caudal_m3s": None,
             "tendencia_nivel": None,
             "tendencia_caudal": None,
+            "saih_error": None,
+            "saih_error_detail": None,
         })
         aemet_cache_by_site.setdefault(sid, {**_default_aemet(), "_epoch": None})
         ia_cache_by_site.setdefault(sid, _default_ia())
@@ -720,7 +741,14 @@ async def api_history_download(
     tags = [tag for tag in tags if tag]
 
     if not tags:
-        return JSONResponse({"ok": False, "error": "site_without_requested_signals"}, status_code=400)
+        return JSONResponse(
+            {
+                "ok": False,
+                "error": "site_without_requested_signals",
+                "message": "Este municipio no tiene senales SAIH para el dato solicitado. No es un fallo de la web.",
+            },
+            status_code=400,
+        )
 
     try:
         records = await asyncio.to_thread(fetch_saih_history, tags, range_start, range_end)
@@ -730,7 +758,12 @@ async def api_history_download(
             {
                 "ok": False,
                 "error": "saih_history_error",
-                "message": str(e),
+                "message": (
+                    "No se ha podido descargar el historico porque la API de SAIH Ebro "
+                    "no ha respondido correctamente. No es un fallo de la web; prueba mas tarde "
+                    "o con otro tramo de fechas."
+                ),
+                "detail": str(e),
             },
             status_code=502,
         )
@@ -742,10 +775,30 @@ async def api_history_download(
             {
                 "ok": False,
                 "error": "history_without_data",
-                "message": "SAIH no ha devuelto datos para ese rango.",
+                "message": (
+                    "SAIH Ebro no ha devuelto datos para ese municipio, variable o tramo de fechas. "
+                    "No es un fallo de la web; ese periodo puede no tener datos publicados."
+                ),
             },
             status_code=404,
         )
+
+    history_warning = ""
+    try:
+        observed_days = {
+            pd.Timestamp(value).date()
+            for value in pd.to_datetime(df["fecha"], errors="coerce").dropna()
+        }
+        days_count = (range_end - range_start).days + 1
+
+        if len(observed_days) < days_count:
+            missing_days = days_count - len(observed_days)
+            history_warning = (
+                f"SAIH Ebro no ha devuelto datos para {missing_days} dia(s) del tramo seleccionado; "
+                "el archivo incluye solo los registros disponibles."
+            )
+    except Exception:
+        history_warning = ""
 
     base_filename = (
         f"historico_{_slugify_filename(site.get('name', site_id))}_"
@@ -773,6 +826,7 @@ async def api_history_download(
             "X-History-End-Date": range_end.isoformat(),
             "X-History-Granularity": granularity,
             "X-History-Rows": str(len(df)),
+            **({"X-History-Warning": history_warning} if history_warning else {}),
         },
     )
 
@@ -1249,6 +1303,8 @@ def _build_payload(site_id: str, forced_is_new: Optional[bool] = None) -> Dict[s
         "caudal_m3s": sc.get("caudal_m3s"),
         "tendencia_nivel": sc.get("tendencia_nivel"),
         "tendencia_caudal": sc.get("tendencia_caudal"),
+        "saih_error": sc.get("saih_error"),
+        "saih_error_detail": sc.get("saih_error_detail"),
 
         **_aemet_public_cache(site_id),
         **_ia_public_cache(site_id),
@@ -1492,6 +1548,7 @@ async def _refresh_saih_cache_once():
 
         BATCH_SIZE = 20
         all_signals: Dict[str, Dict[str, Any]] = {}
+        batch_errors: list[str] = []
 
         for batch in _chunk(tags, BATCH_SIZE):
             try:
@@ -1501,8 +1558,10 @@ async def _refresh_saih_cache_once():
                 if e.response is not None and e.response.status_code == 429:
                     await asyncio.sleep(60)
                 print("[SAIH ERROR batch HTTP]", repr(e))
+                batch_errors.append(str(e))
             except Exception as e:
                 print("[SAIH ERROR batch]", repr(e))
+                batch_errors.append(str(e))
 
             await asyncio.sleep(0.2)
 
@@ -1516,6 +1575,25 @@ async def _refresh_saih_cache_once():
 
             ts = (nivel.get("fecha") or caudal.get("fecha")) if (nivel or caudal) else None
             prev = saih_cache_by_site.get(sid, {})
+            missing_signals = []
+
+            if nivel_tag and not nivel:
+                missing_signals.append("nivel")
+            if caudal_tag and not caudal:
+                missing_signals.append("caudal")
+
+            if not nivel_tag and not caudal_tag:
+                saih_error = "Este municipio no tiene senales SAIH configuradas."
+                saih_error_detail = "site_without_saih_signals"
+            elif missing_signals:
+                saih_error = (
+                    "SAIH Ebro no esta devolviendo datos actualizados para "
+                    f"{', '.join(missing_signals)} en este municipio. No es un fallo de la web."
+                )
+                saih_error_detail = "; ".join(batch_errors) if batch_errors else "signals_without_data"
+            else:
+                saih_error = None
+                saih_error_detail = None
 
             saih_cache_by_site[sid] = {
                 "ts": ts or prev.get("ts"),
@@ -1523,10 +1601,18 @@ async def _refresh_saih_cache_once():
                 "caudal_m3s": (caudal.get("valor") if caudal else prev.get("caudal_m3s")),
                 "tendencia_nivel": (nivel.get("tendencia") if nivel else prev.get("tendencia_nivel")),
                 "tendencia_caudal": (caudal.get("tendencia") if caudal else prev.get("tendencia_caudal")),
+                "saih_error": saih_error,
+                "saih_error_detail": saih_error_detail,
             }
 
     except Exception as e:
         print("[SAIH ERROR]", repr(e))
+        for sid, prev in list(saih_cache_by_site.items()):
+            saih_cache_by_site[sid] = {
+                **prev,
+                "saih_error": "SAIH Ebro no esta respondiendo ahora mismo. No es un fallo de la web.",
+                "saih_error_detail": str(e),
+            }
 
 async def _push_to_clients_from_cache():
     for ws in list(clients):
