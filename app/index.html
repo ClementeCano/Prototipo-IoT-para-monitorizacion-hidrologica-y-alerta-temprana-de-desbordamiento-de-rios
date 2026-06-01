@@ -3210,13 +3210,27 @@
       }
     }
 
+    function formatIaError(error) {
+      const text = String(error || "");
+
+      if (text.includes("prediction_recent_saih_unavailable")) {
+        return "No se puede generar una predicción actual porque SAIH Ebro no está devolviendo suficientes datos recientes. No es un fallo de la web.";
+      }
+
+      if (text.includes("429") || text.toLowerCase().includes("too many requests")) {
+        return "SAIH Ebro ha limitado temporalmente las peticiones. No es un fallo de la web; prueba de nuevo en unos minutos.";
+      }
+
+      return `Error IA: ${text}`;
+    }
+
     function updateIAState(error, pred) {
       iaRef.textContent = window._lastIaRef ?? "-";
 
       if (error) {
         setChartLoading(predChartLoading, false);
         iaErr.style.display = "block";
-        iaErr.textContent = `Error IA: ${error}`;
+        iaErr.textContent = formatIaError(error);
         iaState.textContent = "Error";
         return;
       }

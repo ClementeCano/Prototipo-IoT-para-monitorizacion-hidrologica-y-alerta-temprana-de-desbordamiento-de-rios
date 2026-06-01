@@ -25,7 +25,11 @@ VENTANA = 14
 HORIZONTE = 7
 LIVE_SAIH_LOOKBACK_DAYS = int(os.getenv("PREDICTION_LIVE_SAIH_LOOKBACK_DAYS", "21"))
 LIVE_SAIH_CACHE_SECONDS = int(os.getenv("PREDICTION_LIVE_SAIH_CACHE_SECONDS", "1800"))
+LIVE_SAIH_REQUEST_TIMEOUT_SECONDS = float(os.getenv("PREDICTION_LIVE_SAIH_REQUEST_TIMEOUT_SECONDS", "5"))
+LIVE_SAIH_MAX_SECONDS = float(os.getenv("PREDICTION_LIVE_SAIH_MAX_SECONDS", "25"))
 USE_LIVE_SAIH_WINDOW = os.getenv("PREDICTION_USE_LIVE_SAIH", "1").lower() in {"1", "true", "yes"}
+MAX_DATASET_STALENESS_DAYS = int(os.getenv("PREDICTION_MAX_DATASET_STALENESS_DAYS", "14"))
+ALLOW_STALE_DATASET_FALLBACK = os.getenv("PREDICTION_ALLOW_STALE_DATASET_FALLBACK", "0").lower() in {"1", "true", "yes"}
 SITES_BY_ID = {site["id"]: site for site in SITES}
 _ARTIFACT_CACHE = {}
 _DATASET_CACHE = {}
@@ -160,6 +164,38 @@ def _records_to_daily_dataset(site_id: str, records: list[dict]) -> pd.DataFrame
     return daily[["fecha", "nivel_m", "caudal_m3s", "lluvia_mm", "desbordamiento"]]
 
 
+def _dataset_last_date(df: pd.DataFrame):
+    if df is None or df.empty or "fecha" not in df.columns:
+        return None
+
+    dates = pd.to_datetime(df["fecha"], errors="coerce").dropna()
+    if dates.empty:
+        return None
+
+    return dates.max().date()
+
+
+def _fallback_prediction_window(site_id: str, base_df: pd.DataFrame, reason: str) -> pd.DataFrame:
+    last_date = _dataset_last_date(base_df)
+    is_stale = (
+        last_date is None
+        or (
+            MAX_DATASET_STALENESS_DAYS >= 0
+            and (date.today() - last_date).days > MAX_DATASET_STALENESS_DAYS
+        )
+    )
+
+    if is_stale and not ALLOW_STALE_DATASET_FALLBACK:
+        last_label = last_date.isoformat() if last_date else "sin fecha"
+        raise RuntimeError(
+            "prediction_recent_saih_unavailable: "
+            f"{reason}. Dataset local hasta {last_label}; no se usa como dato actual."
+        )
+
+    print(f"IA {site_id}: usando dataset local como fallback ({reason})")
+    return base_df
+
+
 def _load_live_prediction_window(site_id: str, base_df: pd.DataFrame, use_live_saih: bool | None = None) -> pd.DataFrame:
     use_live = USE_LIVE_SAIH_WINDOW if use_live_saih is None else bool(use_live_saih)
 
@@ -173,25 +209,32 @@ def _load_live_prediction_window(site_id: str, base_df: pd.DataFrame, use_live_s
 
     site = SITES_BY_ID.get(site_id)
     if not site:
-        return base_df
+        return _fallback_prediction_window(site_id, base_df, "municipio no configurado para SAIH")
 
     saih = site.get("saih") or {}
     tags = [tag for tag in [saih.get("nivel"), saih.get("caudal")] if tag]
     if len(tags) < 2:
-        return base_df
+        return _fallback_prediction_window(site_id, base_df, "municipio sin senales SAIH suficientes")
 
     end_date = date.today()
     start_date = end_date - timedelta(days=max(LIVE_SAIH_LOOKBACK_DAYS, VENTANA + 7))
 
     try:
-        records = fetch_saih_history(tags, start_date, end_date)
+        records = fetch_saih_history(
+            tags,
+            start_date,
+            end_date,
+            request_timeout=(2, LIVE_SAIH_REQUEST_TIMEOUT_SECONDS),
+            request_attempts=1,
+            max_seconds=LIVE_SAIH_MAX_SECONDS,
+        )
         live_df = _records_to_daily_dataset(site_id, records)
     except Exception as exc:
         print(f"SAIH no disponible para ventana IA {site_id}: {exc}")
-        return base_df
+        return _fallback_prediction_window(site_id, base_df, f"SAIH no disponible: {exc}")
 
     if live_df.empty or len(live_df) < VENTANA:
-        return base_df
+        return _fallback_prediction_window(site_id, base_df, "SAIH no tiene suficientes dias recientes")
 
     base_min = base_df[["fecha", "nivel_m", "caudal_m3s", "lluvia_mm", "desbordamiento"]].copy()
     combined = pd.concat([base_min.tail(VENTANA + 7), live_df], ignore_index=True)
@@ -206,7 +249,7 @@ def _load_live_prediction_window(site_id: str, base_df: pd.DataFrame, use_live_s
     combined = combined.dropna().reset_index(drop=True)
 
     if len(combined) < VENTANA:
-        return base_df
+        return _fallback_prediction_window(site_id, base_df, "ventana reciente insuficiente tras preparar variables")
 
     print(f"IA {site_id}: usando ventana SAIH reciente hasta {combined['fecha'].iloc[-1]}")
     _LIVE_WINDOW_CACHE[site_id] = {"epoch": now, "df": combined}

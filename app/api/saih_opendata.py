@@ -21,16 +21,18 @@ URL = "https://www.saihebro.com/datos/apiopendata"
 HISTORY_REQUEST_DELAY_SECONDS = float(os.getenv("SAIH_HISTORY_REQUEST_DELAY_SECONDS", "0.1"))
 SAIH_SSL_MODE = os.getenv("SAIH_SSL_MODE", "auto").strip().lower()
 SAIH_VERIFY_SSL = os.getenv("SAIH_VERIFY_SSL", "1").lower() not in {"0", "false", "no"}
+SAIH_HTTP_RETRIES = max(0, int(os.getenv("SAIH_HTTP_RETRIES", "0")))
 _WARNED_INSECURE_SSL = False
+_WORKING_VERIFY = None
 
 
 def _build_session() -> requests.Session:
     session = requests.Session()
 
     retries = urllib3.Retry(
-        total=4,
-        connect=4,
-        read=4,
+        total=SAIH_HTTP_RETRIES,
+        connect=SAIH_HTTP_RETRIES,
+        read=SAIH_HTTP_RETRIES,
         backoff_factor=1.2,
         status_forcelist=[429, 500, 502, 503, 504],
         allowed_methods=["GET"],
@@ -61,6 +63,9 @@ _SESSION = _build_session()
 
 
 def _verify_candidates():
+    if _WORKING_VERIFY is not None:
+        return [_WORKING_VERIFY]
+
     if not SAIH_VERIFY_SSL or SAIH_SSL_MODE in {"0", "false", "no", "insecure", "disabled"}:
         return [False]
 
@@ -73,25 +78,44 @@ def _verify_candidates():
     return [certifi.where(), True, False]
 
 
-def _safe_get(url: str, params: dict, timeout=(6, 20)):
-    global _WARNED_INSECURE_SSL
+def _bounded_timeout(timeout, remaining: float | None):
+    if remaining is None:
+        return timeout
+
+    remaining = max(0.1, remaining)
+    if isinstance(timeout, tuple):
+        return (min(float(timeout[0]), remaining), min(float(timeout[1]), remaining))
+    return min(float(timeout), remaining)
+
+
+def _safe_get(url: str, params: dict, timeout=(6, 20), attempts: int = 2, max_seconds: float | None = None):
+    global _WARNED_INSECURE_SSL, _WORKING_VERIFY
     last_error = None
+    started = time.monotonic()
 
     for verify in _verify_candidates():
+        if max_seconds is not None and (time.monotonic() - started) > max_seconds:
+            raise TimeoutError(f"SAIH request supero el limite de {max_seconds:.1f}s")
+
         if verify is False and not _WARNED_INSECURE_SSL:
             urllib3.disable_warnings(InsecureRequestWarning)
             print("[SAIH SSL] Usando fallback sin verificacion SSL para saihebro.com")
             _WARNED_INSECURE_SSL = True
 
-        for attempt in range(1, 4):
+        for attempt in range(1, max(1, attempts) + 1):
+            if max_seconds is not None and (time.monotonic() - started) > max_seconds:
+                raise TimeoutError(f"SAIH request supero el limite de {max_seconds:.1f}s")
+
+            remaining = None if max_seconds is None else max_seconds - (time.monotonic() - started)
             try:
                 r = _SESSION.get(
                     url,
                     params=params,
-                    timeout=timeout,
+                    timeout=_bounded_timeout(timeout, remaining),
                     verify=verify,
                 )
                 r.raise_for_status()
+                _WORKING_VERIFY = verify
                 return r.json()
 
             except requests.exceptions.SSLError as e:
@@ -176,7 +200,14 @@ def _extract_signal_items(data: Any) -> list[dict[str, Any]]:
     ]
 
 
-def fetch_saih_history(tags: List[str], start_date: date, end_date: date) -> list[dict[str, Any]]:
+def fetch_saih_history(
+    tags: List[str],
+    start_date: date,
+    end_date: date,
+    request_timeout=None,
+    request_attempts: int = 2,
+    max_seconds: float | None = None,
+) -> list[dict[str, Any]]:
     """
     Descarga datos historicos de SAIH por dias completos.
     La API de SAIH solo devuelve las 24 horas posteriores a cada fecha de inicio,
@@ -195,15 +226,27 @@ def fetch_saih_history(tags: List[str], start_date: date, end_date: date) -> lis
         return []
 
     records: list[dict[str, Any]] = []
+    started = time.monotonic()
+    timeout = request_timeout or (8, 30)
 
     for day in _iter_days(start_date, end_date):
+        if max_seconds is not None and (time.monotonic() - started) > max_seconds:
+            raise TimeoutError(f"SAIH history supero el limite de {max_seconds:.1f}s")
+
         params = {
             "senal": ",".join(tags),
             "inicio": day.isoformat(),
             "apikey": apikey,
         }
 
-        data = _safe_get(URL, params, timeout=(8, 30))
+        remaining = None if max_seconds is None else max_seconds - (time.monotonic() - started)
+        data = _safe_get(
+            URL,
+            params,
+            timeout=timeout,
+            attempts=request_attempts,
+            max_seconds=remaining,
+        )
         records.extend(_extract_signal_items(data))
 
         if HISTORY_REQUEST_DELAY_SECONDS > 0:

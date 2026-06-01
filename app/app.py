@@ -1349,7 +1349,7 @@ def _chunk(lst: list[str], n: int) -> list[list[str]]:
     return [lst[i:i+n] for i in range(0, len(lst), n)]
 
 
-async def _run_prediction(site_id: str, use_live_saih: bool = False):
+async def _run_prediction(site_id: str, use_live_saih: Optional[bool] = None):
     if IA_EXECUTOR is not None:
         loop = asyncio.get_running_loop()
         return await loop.run_in_executor(IA_EXECUTOR, predecir_semana_municipio, site_id, use_live_saih)
@@ -1373,7 +1373,7 @@ async def refresh_ia_for_site(site_id: str, force: bool = False) -> bool:
     print("🚀 IA para:", site_id)
 
     try:
-        pred = await _run_prediction(site_id, use_live_saih=force)
+        pred = await _run_prediction(site_id, use_live_saih=True if force else None)
 
         if pred is None:
             pred = []
