@@ -124,7 +124,7 @@ def _safe_get(url: str, params: dict, timeout=(6, 20), attempts: int = 2, max_se
 
             except requests.exceptions.RequestException as e:
                 last_error = e
-                if attempt < 3:
+                if attempt < max(1, attempts):
                     time.sleep(attempt * 1.5)
                 else:
                     break
@@ -132,7 +132,12 @@ def _safe_get(url: str, params: dict, timeout=(6, 20), attempts: int = 2, max_se
     raise RuntimeError(f"Error conexion SAIH: {last_error}")
 
 
-def fetch_saih_signals(tags: List[str]) -> Dict[str, Dict[str, Any]]:
+def fetch_saih_signals(
+    tags: List[str],
+    request_timeout=None,
+    request_attempts: int = 1,
+    max_seconds: float | None = None,
+) -> Dict[str, Dict[str, Any]]:
     """
     1 llamada para muchas señales.
     Devuelve:
@@ -153,7 +158,13 @@ def fetch_saih_signals(tags: List[str]) -> Dict[str, Dict[str, Any]]:
         "apikey": apikey,
     }
 
-    data = _safe_get(URL, params)
+    data = _safe_get(
+        URL,
+        params,
+        timeout=request_timeout or (4, 10),
+        attempts=request_attempts,
+        max_seconds=max_seconds,
+    )
 
     if not isinstance(data, list):
         raise RuntimeError(f"Formato SAIH inesperado: {type(data)}")

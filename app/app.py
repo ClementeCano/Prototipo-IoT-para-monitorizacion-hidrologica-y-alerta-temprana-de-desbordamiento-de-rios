@@ -70,7 +70,6 @@ from concurrent.futures import ProcessPoolExecutor
 from typing import Dict, Any, Set, Optional
 from zoneinfo import ZoneInfo
 
-import requests
 import pandas as pd
 from fastapi import FastAPI, HTTPException, Request, Response, WebSocket, WebSocketDisconnect
 from fastapi.responses import FileResponse, HTMLResponse, JSONResponse
@@ -235,8 +234,14 @@ def limpiar_tokens_invalidos(invalid_tokens):
 # ---------------------------
 # Config
 # ---------------------------
-# SAIH rate limit: 5/min → 20s = 3/min (seguro)
-POLL_SECONDS = 20
+# SAIH rate-limit: se refresca en segundo plano y se evita llamar por cada click.
+POLL_SECONDS = int(os.getenv("SAIH_POLL_SECONDS", "180"))
+SAIH_BATCH_SIZE = max(1, int(os.getenv("SAIH_BATCH_SIZE", "20")))
+SAIH_BATCH_DELAY_SECONDS = float(os.getenv("SAIH_BATCH_DELAY_SECONDS", "12"))
+SAIH_REQUEST_MAX_SECONDS = float(os.getenv("SAIH_REQUEST_MAX_SECONDS", "15"))
+SAIH_RATE_LIMIT_COOLDOWN_SECONDS = int(os.getenv("SAIH_RATE_LIMIT_COOLDOWN_SECONDS", "300"))
+SAIH_REFRESH_ON_WS = os.getenv("SAIH_REFRESH_ON_WS", "0").lower() in {"1", "true", "yes"}
+SAIH_SITE_REFRESH_MIN_SECONDS = int(os.getenv("SAIH_SITE_REFRESH_MIN_SECONDS", "300"))
 
 # AEMET: refresco real cada 30 min, comprobación cada 60s
 AEMET_REFRESH_SECONDS = 1800
@@ -524,10 +529,57 @@ def _saih_signal_issue(signal: dict[str, Any], name: str) -> Optional[str]:
     return None
 
 
+def _is_saih_rate_limit_error(exc: Exception) -> bool:
+    text = str(exc).lower()
+    return "429" in text or "too many requests" in text
+
+
+def _saih_rate_limit_seconds_left() -> int:
+    if not saih_rate_limit_until:
+        return 0
+
+    seconds = int((saih_rate_limit_until - datetime.now()).total_seconds())
+    return max(0, seconds)
+
+
+def _set_saih_rate_limit(reason: str) -> None:
+    global saih_rate_limit_until
+
+    until = datetime.now() + timedelta(seconds=SAIH_RATE_LIMIT_COOLDOWN_SECONDS)
+    if not saih_rate_limit_until or until > saih_rate_limit_until:
+        saih_rate_limit_until = until
+
+    message = (
+        "SAIH Ebro ha limitado temporalmente las peticiones. "
+        "No es un fallo de la web; se reintentara automaticamente."
+    )
+
+    for sid, prev in list(saih_cache_by_site.items()):
+        saih_cache_by_site[sid] = {
+            **prev,
+            "saih_error": message,
+            "saih_error_detail": reason,
+        }
+
+    print(
+        "[SAIH RATE LIMIT] cooldown="
+        f"{SAIH_RATE_LIMIT_COOLDOWN_SECONDS}s reason={reason}"
+    )
+
+
 async def refresh_prediction_actuals_for_site(site_id: str) -> dict[str, Any]:
     site = SITES_BY_ID.get(site_id)
     if not site:
         return {"checked": False, "error": "site_not_found"}
+
+    cooldown_left = _saih_rate_limit_seconds_left()
+    if cooldown_left > 0:
+        return {
+            "checked": False,
+            "updated": 0,
+            "skipped": "saih_rate_limited",
+            "next_check_seconds": cooldown_left,
+        }
 
     today = _today_madrid()
     max_date = today if PREDICTION_EVAL_INCLUDE_TODAY else today - timedelta(days=1)
@@ -578,6 +630,9 @@ async def refresh_prediction_actuals_for_site(site_id: str) -> dict[str, Any]:
         updated = await asyncio.to_thread(prediction_store.update_actuals, site_id, actuals)
     except Exception as e:
         print("[PREDICTION EVAL ERROR]", site_id, repr(e))
+        if _is_saih_rate_limit_error(e):
+            _set_saih_rate_limit(str(e))
+
         return {
             "checked": False,
             "pending_dates": len(pending_dates),
@@ -627,6 +682,8 @@ aemet_inflight: set[str] = set()
 
 # SAIH cache por sitio (último nivel/caudal/tendencias)
 saih_cache_by_site: Dict[str, Dict[str, Any]] = {}
+saih_rate_limit_until: Optional[datetime] = None
+saih_refresh_epoch_by_site: Dict[str, float] = {}
 
 # IA cache por sitio
 ia_cache_by_site: Dict[str, Dict[str, Any]] = {}
@@ -1587,7 +1644,7 @@ async def ws(websocket: WebSocket):
 
                     # 2) refrescos inmediatos
                     async def _refresh_and_push(site_id: str):
-                        updated_saih = await refresh_saih_for_site(site_id)
+                        updated_saih = await refresh_saih_for_site(site_id) if SAIH_REFRESH_ON_WS else False
                         if updated_saih:
                             if websocket in clients and ws_site.get(websocket) == site_id:
                                 await websocket.send_text(json.dumps(_build_payload(site_id, forced_is_new=True), ensure_ascii=False))
@@ -1667,6 +1724,19 @@ def _update_saih_cache_for_site(
 
 
 async def refresh_saih_for_site(site_id: str) -> bool:
+    cooldown_left = _saih_rate_limit_seconds_left()
+    if cooldown_left > 0:
+        return False
+
+    now_epoch = datetime.now().timestamp()
+    last_epoch = saih_refresh_epoch_by_site.get(site_id)
+    if (
+        last_epoch is not None
+        and SAIH_SITE_REFRESH_MIN_SECONDS > 0
+        and (now_epoch - last_epoch) < SAIH_SITE_REFRESH_MIN_SECONDS
+    ):
+        return False
+
     site = SITES_BY_ID.get(site_id)
     if not site:
         return False
@@ -1685,14 +1755,28 @@ async def refresh_saih_for_site(site_id: str) -> bool:
         return True
 
     try:
-        signals = await asyncio.to_thread(fetch_saih_signals, tags)
+        saih_refresh_epoch_by_site[site_id] = now_epoch
+        signals = await asyncio.to_thread(
+            fetch_saih_signals,
+            tags,
+            (3, 8),
+            1,
+            SAIH_REQUEST_MAX_SECONDS,
+        )
         _update_saih_cache_for_site(site, signals, [])
     except Exception as e:
         print("[SAIH SITE ERROR]", site_id, repr(e))
+        if _is_saih_rate_limit_error(e):
+            _set_saih_rate_limit(str(e))
+
         prev = saih_cache_by_site.get(site_id, {})
         saih_cache_by_site[site_id] = {
             **prev,
-            "saih_error": "SAIH Ebro no esta respondiendo ahora mismo. No es un fallo de la web.",
+            "saih_error": (
+                "SAIH Ebro ha limitado temporalmente las peticiones. No es un fallo de la web."
+                if _is_saih_rate_limit_error(e)
+                else "SAIH Ebro no esta respondiendo ahora mismo. No es un fallo de la web."
+            ),
             "saih_error_detail": str(e),
         }
 
@@ -1705,38 +1789,55 @@ async def _refresh_saih_cache_once():
     Además, si un batch falla, no machacamos el cache con None: conservamos el último dato válido.
     """
     try:
+        cooldown_left = _saih_rate_limit_seconds_left()
+        if cooldown_left > 0:
+            print(f"[SAIH RATE LIMIT] refresco global omitido, quedan {cooldown_left}s")
+            return
+
         tags = collect_all_tags()
         if not tags:
             return
 
-        BATCH_SIZE = 20
         all_signals: Dict[str, Dict[str, Any]] = {}
         batch_errors: list[str] = []
+        batches = _chunk(tags, SAIH_BATCH_SIZE)
 
-        for batch in _chunk(tags, BATCH_SIZE):
+        for index, batch in enumerate(batches):
             try:
-                signals = await asyncio.to_thread(fetch_saih_signals, batch)
+                signals = await asyncio.to_thread(
+                    fetch_saih_signals,
+                    batch,
+                    (3, 8),
+                    1,
+                    SAIH_REQUEST_MAX_SECONDS,
+                )
                 all_signals.update(signals)
-            except requests.HTTPError as e:
-                if e.response is not None and e.response.status_code == 429:
-                    await asyncio.sleep(60)
-                print("[SAIH ERROR batch HTTP]", repr(e))
-                batch_errors.append(str(e))
             except Exception as e:
                 print("[SAIH ERROR batch]", repr(e))
                 batch_errors.append(str(e))
+                if _is_saih_rate_limit_error(e):
+                    _set_saih_rate_limit(str(e))
+                    break
 
-            await asyncio.sleep(0.2)
+            if SAIH_BATCH_DELAY_SECONDS > 0 and index < len(batches) - 1:
+                await asyncio.sleep(SAIH_BATCH_DELAY_SECONDS)
 
         for s in SITES:
             _update_saih_cache_for_site(s, all_signals, batch_errors)
 
     except Exception as e:
         print("[SAIH ERROR]", repr(e))
+        if _is_saih_rate_limit_error(e):
+            _set_saih_rate_limit(str(e))
+
         for sid, prev in list(saih_cache_by_site.items()):
             saih_cache_by_site[sid] = {
                 **prev,
-                "saih_error": "SAIH Ebro no esta respondiendo ahora mismo. No es un fallo de la web.",
+                "saih_error": (
+                    "SAIH Ebro ha limitado temporalmente las peticiones. No es un fallo de la web."
+                    if _is_saih_rate_limit_error(e)
+                    else "SAIH Ebro no esta respondiendo ahora mismo. No es un fallo de la web."
+                ),
                 "saih_error_detail": str(e),
             }
 
@@ -1765,9 +1866,9 @@ async def poll_saih_loop():
     await _push_to_clients_from_cache()
 
     while True:
+        await asyncio.sleep(POLL_SECONDS)
         await _refresh_saih_cache_once()
         await _push_to_clients_from_cache()
-        await asyncio.sleep(POLL_SECONDS)
 
 async def poll_aemet_loop():
     """
