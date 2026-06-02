@@ -248,7 +248,7 @@ STARTUP_BACKGROUND_DELAY_SECONDS = int(os.getenv("STARTUP_BACKGROUND_DELAY_SECON
 IA_REFRESH_SECONDS = int(os.getenv("IA_REFRESH_SECONDS", "3600"))
 IA_WORKERS = int(os.getenv("IA_WORKERS", "1"))
 IA_PROCESS_POOL_ENABLED = os.getenv("IA_PROCESS_POOL_ENABLED", "1").lower() in {"1", "true", "yes"}
-IA_REFRESH_ON_WS = os.getenv("IA_REFRESH_ON_WS", "1").lower() in {"1", "true", "yes"}
+IA_REFRESH_ON_WS = os.getenv("IA_REFRESH_ON_WS", "0").lower() in {"1", "true", "yes"}
 IA_EXECUTOR = ProcessPoolExecutor(max_workers=IA_WORKERS) if IA_PROCESS_POOL_ENABLED else None
 HISTORY_DOWNLOAD_MAX_DAYS = int(os.getenv("HISTORY_DOWNLOAD_MAX_DAYS", "366"))
 PREDICTION_EVAL_LOOKBACK_DAYS = int(os.getenv("PREDICTION_EVAL_LOOKBACK_DAYS", "30"))
@@ -636,11 +636,32 @@ ia_reliability_cache_by_site: Dict[str, Dict[str, Any]] = {}
 daily_prediction_dates_run: set[str] = set()
 prediction_actual_refresh_epoch_by_site: Dict[str, float] = {}
 
-def _default_ia() -> Dict[str, Any]:
+def _default_ia(store_checked: bool = False) -> Dict[str, Any]:
     return {
         "ia_refreshed_at": None,
         "ia_error": None,
         "pred_semana": [],
+        "pred_semana_source": None,
+        "pred_semana_store_checked": store_checked,
+    }
+
+
+def _stored_ia(site_id: str) -> Dict[str, Any]:
+    try:
+        forecast = prediction_store.latest_forecast(site_id)
+    except Exception as e:
+        print("[PREDICTION FORECAST LOAD ERROR]", site_id, repr(e))
+        return _default_ia(store_checked=True)
+
+    if not forecast:
+        return _default_ia(store_checked=True)
+
+    return {
+        "ia_refreshed_at": forecast.get("issued_at"),
+        "ia_error": None,
+        "pred_semana": forecast.get("predictions") or [],
+        "pred_semana_source": "persisted",
+        "pred_semana_store_checked": True,
     }
 
 def _init_caches():
@@ -656,7 +677,7 @@ def _init_caches():
             "saih_error_detail": None,
         })
         aemet_cache_by_site.setdefault(sid, {**_default_aemet(), "_epoch": None})
-        ia_cache_by_site.setdefault(sid, _default_ia())
+        ia_cache_by_site.setdefault(sid, _stored_ia(sid))
 
 _init_caches()
 
@@ -1310,7 +1331,18 @@ def _aemet_public_cache(site_id: str) -> Dict[str, Any]:
 def _ia_public_cache(site_id: str) -> Dict[str, Any]:
     c = ia_cache_by_site.get(site_id)
     if not c:
-        return _default_ia()
+        stored = _stored_ia(site_id)
+        ia_cache_by_site[site_id] = stored
+        return stored
+
+    if not c.get("pred_semana") and not c.get("pred_semana_store_checked"):
+        stored = _stored_ia(site_id)
+        if stored.get("pred_semana"):
+            ia_cache_by_site[site_id] = stored
+            return stored
+        ia_cache_by_site[site_id] = {**c, **stored}
+        return ia_cache_by_site[site_id]
+
     return c
 
 
@@ -1379,10 +1411,16 @@ async def refresh_ia_for_site(site_id: str, force: bool = False) -> bool:
             pred = []
 
         stored_predictions = 0
+        stored_forecast = 0
         site = SITES_BY_ID.get(site_id)
 
         if site and pred:
             try:
+                stored_forecast = await asyncio.to_thread(
+                    prediction_store.store_forecast,
+                    site,
+                    pred,
+                )
                 stored_predictions = await asyncio.to_thread(
                     prediction_store.store_prediction,
                     site,
@@ -1397,6 +1435,9 @@ async def refresh_ia_for_site(site_id: str, force: bool = False) -> bool:
             "ia_error": None,
             "pred_semana": pred,
             "pred_semana_persistida": stored_predictions,
+            "pred_semana_forecast_persistido": stored_forecast,
+            "pred_semana_source": "fresh",
+            "pred_semana_store_checked": True,
         }
         ia_epoch_by_site[site_id] = now_epoch
 
@@ -1407,6 +1448,8 @@ async def refresh_ia_for_site(site_id: str, force: bool = False) -> bool:
             "ia_refreshed_at": datetime.now().isoformat(timespec="seconds"),
             "ia_error": repr(e),
             "pred_semana": [],
+            "pred_semana_source": None,
+            "pred_semana_store_checked": True,
         }
 
         traceback.print_exc()

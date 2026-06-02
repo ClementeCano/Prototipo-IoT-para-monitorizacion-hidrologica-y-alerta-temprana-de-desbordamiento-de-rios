@@ -41,6 +41,7 @@ primary_region = 'cdg'
   ALERT_MINUTE = "17"
   ALERT_CHECK_SECONDS = "5"
   ALERT_TIMEZONE = "Europe/Madrid"
+  IA_REFRESH_ON_WS = "0"
   CUDA_VISIBLE_DEVICES = "-1"
   TF_CPP_MIN_LOG_LEVEL = "2"
 

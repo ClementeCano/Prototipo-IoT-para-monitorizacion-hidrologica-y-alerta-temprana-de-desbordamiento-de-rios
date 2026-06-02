@@ -1485,6 +1485,21 @@
       chartLoadingTimers.set(element, setInterval(paint, 650));
     }
 
+    function setChartMessage(element, message) {
+      if (!element) {
+        return;
+      }
+
+      const previous = chartLoadingTimers.get(element);
+      if (previous) {
+        clearInterval(previous);
+        chartLoadingTimers.delete(element);
+      }
+
+      element.classList.add("active");
+      element.textContent = message;
+    }
+
     setChartLoading(predChartLoading, true, [
       "Preparando prediccion",
       "Cargando modelo",
@@ -2915,11 +2930,7 @@
         // El primer payload del WebSocket puede llegar antes de que termine la IA.
         // Si ya hay una gráfica válida, la mantenemos hasta recibir datos nuevos.
         if (!predChart) {
-          setChartLoading(predChartLoading, true, [
-            "Calculando prediccion",
-            "Esperando respuesta del modelo",
-            "Preparando datos"
-          ]);
+          setChartMessage(predChartLoading, "Predicción aún no disponible");
         }
         return;
       }
@@ -3224,6 +3235,18 @@
       return `Error IA: ${text}`;
     }
 
+    function formatTrend(value) {
+      const text = String(value ?? "").trim();
+      const normalized = text.toLowerCase();
+      const trends = {
+        "abajo": "bajada",
+        "derecha": "estable",
+        "arriba": "subida"
+      };
+
+      return trends[normalized] || text || "-";
+    }
+
     function updateIAState(error, pred) {
       iaRef.textContent = window._lastIaRef ?? "-";
 
@@ -3391,8 +3414,8 @@
         nivelEl.textContent = (nivel === null) ? "-" : fmt(nivel, 2);
         caudalEl.textContent = (caudal === null) ? "-" : fmt(caudal, 1);
 
-        tnEl.textContent = data.tendencia_nivel ?? "-";
-        tcEl.textContent = data.tendencia_caudal ?? "-";
+        tnEl.textContent = formatTrend(data.tendencia_nivel);
+        tcEl.textContent = formatTrend(data.tendencia_caudal);
 
         setEstadoRio(nivel);
 

@@ -163,6 +163,64 @@ def _public_point(record: dict[str, Any]) -> dict[str, Any]:
     }
 
 
+def _forecast_points(predictions: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    points = []
+
+    for point in predictions or []:
+        if not isinstance(point, dict):
+            continue
+
+        nivel = _float_or_none(point.get("nivel"))
+        caudal = _float_or_none(point.get("caudal"))
+
+        if nivel is None and caudal is None:
+            continue
+
+        points.append({
+            "nivel": nivel,
+            "caudal": caudal,
+        })
+
+    return points
+
+
+def _forecast_record(site: dict[str, Any], predictions: list[dict[str, Any]], issued_at: Optional[str] = None) -> Optional[dict[str, Any]]:
+    if not site:
+        raise PredictionStoreError("site_required")
+
+    site_id = str(site.get("id") or "").strip()
+    if not site_id:
+        raise PredictionStoreError("site_id_required")
+
+    points = _forecast_points(predictions)
+    if not points:
+        return None
+
+    now = issued_at or _iso_now()
+    return {
+        "siteId": site_id,
+        "site": str(site.get("name") or site_id),
+        "issuedAt": now,
+        "predictions": points[:7],
+        "updatedAt": now,
+        "source": "model",
+    }
+
+
+def _public_forecast(record: Optional[dict[str, Any]]) -> Optional[dict[str, Any]]:
+    if not record:
+        return None
+
+    return {
+        "site_id": record.get("siteId"),
+        "site": record.get("site"),
+        "issued_at": record.get("issuedAt"),
+        "predictions": _forecast_points(record.get("predictions") or []),
+        "updated_at": record.get("updatedAt"),
+        "source": record.get("source") or "model",
+    }
+
+
 class JsonPredictionStore:
     storage_backend = "json"
 
@@ -172,7 +230,7 @@ class JsonPredictionStore:
         self.path.parent.mkdir(parents=True, exist_ok=True)
 
     def _empty_data(self) -> dict[str, Any]:
-        return {"version": 1, "predictions": []}
+        return {"version": 1, "predictions": [], "forecasts": []}
 
     def _load_unlocked(self) -> dict[str, Any]:
         if not self.path.exists():
@@ -190,6 +248,7 @@ class JsonPredictionStore:
 
         data.setdefault("version", 1)
         data.setdefault("predictions", [])
+        data.setdefault("forecasts", [])
         return data
 
     def _save_unlocked(self, data: dict[str, Any]) -> None:
@@ -222,6 +281,42 @@ class JsonPredictionStore:
             data["predictions"] = predictions_list
             self._save_unlocked(data)
             return len(rows)
+
+    def store_forecast(self, site: dict[str, Any], predictions: list[dict[str, Any]], issued_at: Optional[str] = None) -> int:
+        record = _forecast_record(site, predictions, issued_at)
+        if not record:
+            return 0
+
+        with self.lock:
+            data = self._load_unlocked()
+            existing = {
+                item.get("siteId"): item
+                for item in data.get("forecasts", [])
+                if isinstance(item, dict) and item.get("siteId")
+            }
+            existing[record["siteId"]] = record
+            data["forecasts"] = sorted(
+                existing.values(),
+                key=lambda item: (item.get("siteId", ""), item.get("updatedAt", "")),
+            )
+            self._save_unlocked(data)
+
+        return len(record["predictions"])
+
+    def latest_forecast(self, site_id: str) -> Optional[dict[str, Any]]:
+        with self.lock:
+            data = self._load_unlocked()
+            forecasts = [
+                item
+                for item in data.get("forecasts", [])
+                if isinstance(item, dict) and item.get("siteId") == site_id
+            ]
+
+        if not forecasts:
+            return None
+
+        forecasts.sort(key=lambda item: item.get("updatedAt", ""), reverse=True)
+        return _public_forecast(forecasts[0])
 
     def pending_actual_dates(
         self,
@@ -389,6 +484,15 @@ class PostgresPredictionStore:
                         ON prediction_points(site_id, target_date)
                         WHERE (nivel_pred IS NOT NULL AND nivel_real IS NULL)
                            OR (caudal_pred IS NOT NULL AND caudal_real IS NULL);
+
+                    CREATE TABLE IF NOT EXISTS prediction_forecasts (
+                        site_id TEXT PRIMARY KEY,
+                        site_name TEXT NOT NULL,
+                        issued_at TEXT NOT NULL,
+                        predictions JSONB NOT NULL,
+                        updated_at TEXT NOT NULL,
+                        source TEXT NOT NULL DEFAULT 'model'
+                    );
                     """
                 )
 
@@ -433,6 +537,63 @@ class PostgresPredictionStore:
                     )
 
         return len(rows)
+
+    def store_forecast(self, site: dict[str, Any], predictions: list[dict[str, Any]], issued_at: Optional[str] = None) -> int:
+        record = _forecast_record(site, predictions, issued_at)
+        if not record:
+            return 0
+
+        with self._connection() as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    """
+                    INSERT INTO prediction_forecasts (
+                        site_id, site_name, issued_at, predictions, updated_at, source
+                    )
+                    VALUES (%s, %s, %s, %s, %s, %s)
+                    ON CONFLICT (site_id) DO UPDATE SET
+                        site_name = EXCLUDED.site_name,
+                        issued_at = EXCLUDED.issued_at,
+                        predictions = EXCLUDED.predictions,
+                        updated_at = EXCLUDED.updated_at,
+                        source = EXCLUDED.source
+                    """,
+                    (
+                        record["siteId"],
+                        record["site"],
+                        record["issuedAt"],
+                        Json(record["predictions"]),
+                        record["updatedAt"],
+                        record["source"],
+                    ),
+                )
+
+        return len(record["predictions"])
+
+    def latest_forecast(self, site_id: str) -> Optional[dict[str, Any]]:
+        with self._connection() as conn:
+            with conn.cursor(cursor_factory=RealDictCursor) as cur:
+                cur.execute(
+                    """
+                    SELECT site_id, site_name, issued_at, predictions, updated_at, source
+                    FROM prediction_forecasts
+                    WHERE site_id = %s
+                    """,
+                    (site_id,),
+                )
+                row = cur.fetchone()
+
+        if not row:
+            return None
+
+        return _public_forecast({
+            "siteId": row["site_id"],
+            "site": row["site_name"],
+            "issuedAt": row["issued_at"],
+            "predictions": row["predictions"],
+            "updatedAt": row["updated_at"],
+            "source": row["source"],
+        })
 
     def pending_actual_dates(
         self,
