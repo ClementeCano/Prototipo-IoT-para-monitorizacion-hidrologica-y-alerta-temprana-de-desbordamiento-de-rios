@@ -254,6 +254,7 @@ IA_REFRESH_SECONDS = int(os.getenv("IA_REFRESH_SECONDS", "3600"))
 IA_WORKERS = int(os.getenv("IA_WORKERS", "1"))
 IA_PROCESS_POOL_ENABLED = os.getenv("IA_PROCESS_POOL_ENABLED", "1").lower() in {"1", "true", "yes"}
 IA_REFRESH_ON_WS = os.getenv("IA_REFRESH_ON_WS", "0").lower() in {"1", "true", "yes"}
+IA_BOOTSTRAP_ON_WS = os.getenv("IA_BOOTSTRAP_ON_WS", "1").lower() in {"1", "true", "yes"}
 IA_EXECUTOR = ProcessPoolExecutor(max_workers=IA_WORKERS) if IA_PROCESS_POOL_ENABLED else None
 HISTORY_DOWNLOAD_MAX_DAYS = int(os.getenv("HISTORY_DOWNLOAD_MAX_DAYS", "366"))
 PREDICTION_EVAL_LOOKBACK_DAYS = int(os.getenv("PREDICTION_EVAL_LOOKBACK_DAYS", "30"))
@@ -688,6 +689,7 @@ saih_refresh_epoch_by_site: Dict[str, float] = {}
 # IA cache por sitio
 ia_cache_by_site: Dict[str, Dict[str, Any]] = {}
 ia_inflight: set[str] = set()
+ia_pending_by_site: set[str] = set()
 ia_epoch_by_site: Dict[str, float] = {}
 ia_reliability_cache_by_site: Dict[str, Dict[str, Any]] = {}
 daily_prediction_dates_run: set[str] = set()
@@ -700,6 +702,7 @@ def _default_ia(store_checked: bool = False) -> Dict[str, Any]:
         "pred_semana": [],
         "pred_semana_source": None,
         "pred_semana_store_checked": store_checked,
+        "pred_semana_pending": False,
     }
 
 
@@ -719,6 +722,7 @@ def _stored_ia(site_id: str) -> Dict[str, Any]:
         "pred_semana": forecast.get("predictions") or [],
         "pred_semana_source": "persisted",
         "pred_semana_store_checked": True,
+        "pred_semana_pending": False,
     }
 
 def _init_caches():
@@ -1386,21 +1390,22 @@ def _aemet_public_cache(site_id: str) -> Dict[str, Any]:
     return {k: v for k, v in c.items() if not k.startswith("_")}
 
 def _ia_public_cache(site_id: str) -> Dict[str, Any]:
+    pending = site_id in ia_inflight or site_id in ia_pending_by_site
     c = ia_cache_by_site.get(site_id)
     if not c:
         stored = _stored_ia(site_id)
         ia_cache_by_site[site_id] = stored
-        return stored
+        return {**stored, "pred_semana_pending": pending}
 
     if not c.get("pred_semana") and not c.get("pred_semana_store_checked"):
         stored = _stored_ia(site_id)
         if stored.get("pred_semana"):
             ia_cache_by_site[site_id] = stored
-            return stored
+            return {**stored, "pred_semana_pending": pending}
         ia_cache_by_site[site_id] = {**c, **stored}
-        return ia_cache_by_site[site_id]
+        return {**ia_cache_by_site[site_id], "pred_semana_pending": pending}
 
-    return c
+    return {**c, "pred_semana_pending": pending}
 
 
 def _build_payload(site_id: str, forced_is_new: Optional[bool] = None) -> Dict[str, Any]:
@@ -1438,23 +1443,50 @@ def _chunk(lst: list[str], n: int) -> list[list[str]]:
     return [lst[i:i+n] for i in range(0, len(lst), n)]
 
 
-async def _run_prediction(site_id: str, use_live_saih: Optional[bool] = None):
+async def _run_prediction(
+    site_id: str,
+    use_live_saih: Optional[bool] = None,
+    allow_stale_fallback: Optional[bool] = None,
+):
     if IA_EXECUTOR is not None:
         loop = asyncio.get_running_loop()
-        return await loop.run_in_executor(IA_EXECUTOR, predecir_semana_municipio, site_id, use_live_saih)
+        return await loop.run_in_executor(
+            IA_EXECUTOR,
+            predecir_semana_municipio,
+            site_id,
+            use_live_saih,
+            allow_stale_fallback,
+        )
 
-    return await asyncio.to_thread(predecir_semana_municipio, site_id, use_live_saih)
+    return await asyncio.to_thread(
+        predecir_semana_municipio,
+        site_id,
+        use_live_saih,
+        allow_stale_fallback,
+    )
 
 
-async def refresh_ia_for_site(site_id: str, force: bool = False) -> bool:
+async def refresh_ia_for_site(
+    site_id: str,
+    force: bool = False,
+    store_evaluation: Optional[bool] = None,
+    use_live_saih: Optional[bool] = None,
+    allow_stale_fallback: Optional[bool] = None,
+) -> bool:
     if site_id in ia_inflight:
         print(f"IA ya en curso para {site_id}")
         return False
 
     now_epoch = datetime.now().timestamp()
     last_epoch = ia_epoch_by_site.get(site_id)
+    cached_pred = ia_cache_by_site.get(site_id, {}).get("pred_semana")
 
-    if not force and last_epoch is not None and (now_epoch - last_epoch) < IA_REFRESH_SECONDS:
+    if (
+        not force
+        and cached_pred
+        and last_epoch is not None
+        and (now_epoch - last_epoch) < IA_REFRESH_SECONDS
+    ):
         return False
 
     ia_inflight.add(site_id)
@@ -1462,7 +1494,11 @@ async def refresh_ia_for_site(site_id: str, force: bool = False) -> bool:
     print("🚀 IA para:", site_id)
 
     try:
-        pred = await _run_prediction(site_id, use_live_saih=True if force else None)
+        pred = await _run_prediction(
+            site_id,
+            use_live_saih=True if force else use_live_saih,
+            allow_stale_fallback=False if force else allow_stale_fallback,
+        )
 
         if pred is None:
             pred = []
@@ -1470,6 +1506,7 @@ async def refresh_ia_for_site(site_id: str, force: bool = False) -> bool:
         stored_predictions = 0
         stored_forecast = 0
         site = SITES_BY_ID.get(site_id)
+        should_store_evaluation = force if store_evaluation is None else bool(store_evaluation)
 
         if site and pred:
             try:
@@ -1478,12 +1515,13 @@ async def refresh_ia_for_site(site_id: str, force: bool = False) -> bool:
                     site,
                     pred,
                 )
-                stored_predictions = await asyncio.to_thread(
-                    prediction_store.store_prediction,
-                    site,
-                    pred,
-                )
-                ia_reliability_cache_by_site.pop(site_id, None)
+                if should_store_evaluation:
+                    stored_predictions = await asyncio.to_thread(
+                        prediction_store.store_prediction,
+                        site,
+                        pred,
+                    )
+                    ia_reliability_cache_by_site.pop(site_id, None)
             except Exception as e:
                 print("[PREDICTION STORE ERROR]", site_id, repr(e))
 
@@ -1495,6 +1533,7 @@ async def refresh_ia_for_site(site_id: str, force: bool = False) -> bool:
             "pred_semana_forecast_persistido": stored_forecast,
             "pred_semana_source": "fresh",
             "pred_semana_store_checked": True,
+            "pred_semana_pending": False,
         }
         ia_epoch_by_site[site_id] = now_epoch
 
@@ -1507,6 +1546,7 @@ async def refresh_ia_for_site(site_id: str, force: bool = False) -> bool:
             "pred_semana": [],
             "pred_semana_source": None,
             "pred_semana_store_checked": True,
+            "pred_semana_pending": False,
         }
 
         traceback.print_exc()
@@ -1644,20 +1684,46 @@ async def ws(websocket: WebSocket):
 
                     # 2) refrescos inmediatos
                     async def _refresh_and_push(site_id: str):
-                        updated_saih = await refresh_saih_for_site(site_id) if SAIH_REFRESH_ON_WS else False
-                        if updated_saih:
+                        async def _send_current_payload():
                             if websocket in clients and ws_site.get(websocket) == site_id:
                                 await websocket.send_text(json.dumps(_build_payload(site_id, forced_is_new=True), ensure_ascii=False))
+
+                        async def _bootstrap_ia_and_push():
+                            try:
+                                await refresh_ia_for_site(
+                                    site_id,
+                                    force=False,
+                                    store_evaluation=False,
+                                    use_live_saih=False,
+                                    allow_stale_fallback=True,
+                                )
+                            finally:
+                                ia_pending_by_site.discard(site_id)
+                            await _send_current_payload()
+
+                        updated_saih = await refresh_saih_for_site(site_id) if SAIH_REFRESH_ON_WS else False
+                        if updated_saih:
+                            await _send_current_payload()
+
+                        ia_state = _ia_public_cache(site_id)
+                        needs_bootstrap = (
+                            IA_BOOTSTRAP_ON_WS
+                            and not ia_state.get("pred_semana")
+                            and site_id not in ia_inflight
+                            and site_id not in ia_pending_by_site
+                        )
+                        if needs_bootstrap:
+                            ia_pending_by_site.add(site_id)
+                            await _send_current_payload()
+                            asyncio.create_task(_bootstrap_ia_and_push())
 
                         updated_aemet = await refresh_aemet_for_site(site_id, force=False)
                         if updated_aemet:
-                            if websocket in clients and ws_site.get(websocket) == site_id:
-                                await websocket.send_text(json.dumps(_build_payload(site_id, forced_is_new=True), ensure_ascii=False))
+                            await _send_current_payload()
 
                         updated_ia = await refresh_ia_for_site(site_id) if IA_REFRESH_ON_WS else False
                         if updated_ia:
-                            if websocket in clients and ws_site.get(websocket) == site_id:
-                                await websocket.send_text(json.dumps(_build_payload(site_id, forced_is_new=True), ensure_ascii=False))
+                            await _send_current_payload()
                     asyncio.create_task(_refresh_and_push(sid))
 
     except WebSocketDisconnect:

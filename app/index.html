@@ -1398,6 +1398,7 @@
     let lastFirebaseError = null;
     let currentUser = null;
     let lastPredData = null;
+    let lastPredPending = false;
     let emailConfig = null;
 
     const userPanel = document.getElementById("userPanel");
@@ -1668,7 +1669,7 @@
       }
 
       if (lastPredData) {
-        updatePredChart(lastPredData);
+        updatePredChart(lastPredData, lastPredPending);
       }
     }
 
@@ -2919,8 +2920,9 @@
       return "#22c55e";
     }
 
-    function updatePredChart(pred) {
+    function updatePredChart(pred, pending = false) {
       lastPredData = pred;
+      lastPredPending = pending;
       const canvas = document.getElementById("predChart");
       if (!canvas) return;
 
@@ -2930,7 +2932,15 @@
         // El primer payload del WebSocket puede llegar antes de que termine la IA.
         // Si ya hay una gráfica válida, la mantenemos hasta recibir datos nuevos.
         if (!predChart) {
-          setChartMessage(predChartLoading, "Predicción aún no disponible");
+          if (pending) {
+            setChartLoading(predChartLoading, true, [
+              "Generando prediccion",
+              "Cargando modelo",
+              "Preparando grafica"
+            ]);
+          } else {
+            setChartMessage(predChartLoading, "Prediccion aun no disponible");
+          }
         }
         return;
       }
@@ -3232,6 +3242,10 @@
         return "SAIH Ebro ha limitado temporalmente las peticiones. No es un fallo de la web; prueba de nuevo en unos minutos.";
       }
 
+      if (text.includes("prediction_model_error") || text.toLowerCase().includes("tensorflow")) {
+        return "El motor de prediccion no esta disponible en este entorno. Revisa que TensorFlow y los modelos esten instalados en el despliegue.";
+      }
+
       return `Error IA: ${text}`;
     }
 
@@ -3461,13 +3475,12 @@
         // console.log("IA ERROR:", data.ia_error);
         console.log("IA PRED:", data.pred_semana);
         updateIAState(data.ia_error, data.pred_semana);
-        updatePredChart(data.pred_semana);
+        updatePredChart(data.pred_semana, data.pred_semana_pending === true);
 
         if (
           data.site_id &&
           data.site_id === currentSite &&
-          data.site_id !== reliabilityLoadedSite &&
-          limpiarPred(data.pred_semana).length > 0
+          data.site_id !== reliabilityLoadedSite
         ) {
           reliabilityLoadedSite = data.site_id;
           loadReliabilityChart(data.site_id);
