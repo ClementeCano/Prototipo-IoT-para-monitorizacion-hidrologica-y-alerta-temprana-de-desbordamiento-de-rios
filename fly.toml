@@ -8,6 +8,9 @@ primary_region = 'cdg'
 
 [build]
 
+[processes]
+  app = "python -m uvicorn app.app:app --host 0.0.0.0 --port 8080"
+
 [env]
   DATA_DIR = "/data"
   USERS_FILE = "/data/users.json"
@@ -47,7 +50,9 @@ primary_region = 'cdg'
   ALERT_HOUR = "12"
   ALERT_MINUTE = "17"
   ALERT_CHECK_SECONDS = "5"
+  ALERT_STARTUP_DELAY_SECONDS = "120"
   ALERT_TIMEZONE = "Europe/Madrid"
+  STARTUP_BACKGROUND_DELAY_SECONDS = "120"
   IA_REFRESH_ON_WS = "0"
   IA_BOOTSTRAP_ON_WS = "1"
   CUDA_VISIBLE_DEVICES = "-1"

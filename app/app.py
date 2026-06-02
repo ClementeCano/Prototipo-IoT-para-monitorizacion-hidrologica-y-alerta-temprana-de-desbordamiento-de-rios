@@ -250,6 +250,7 @@ AEMET_ERROR_RETRY_SECONDS = int(os.getenv("AEMET_ERROR_RETRY_SECONDS", "300"))
 SAIH_STALE_HOURS = int(os.getenv("SAIH_STALE_HOURS", "72"))
 ALERT_CHECK_SECONDS = max(1, int(os.getenv("ALERT_CHECK_SECONDS", "5")))
 STARTUP_BACKGROUND_DELAY_SECONDS = int(os.getenv("STARTUP_BACKGROUND_DELAY_SECONDS", "30"))
+ALERT_STARTUP_DELAY_SECONDS = int(os.getenv("ALERT_STARTUP_DELAY_SECONDS", str(STARTUP_BACKGROUND_DELAY_SECONDS)))
 IA_REFRESH_SECONDS = int(os.getenv("IA_REFRESH_SECONDS", "3600"))
 IA_WORKERS = int(os.getenv("IA_WORKERS", "1"))
 IA_PROCESS_POOL_ENABLED = os.getenv("IA_PROCESS_POOL_ENABLED", "1").lower() in {"1", "true", "yes"}
@@ -2094,7 +2095,13 @@ async def on_startup():
     asyncio.create_task(run_background_loop("PREDICTION EVAL LOOP", poll_prediction_evaluation_loop))
     asyncio.create_task(run_background_loop("PREDICTION DAILY LOOP", poll_daily_prediction_loop))
     #asyncio.create_task(poll_ia_loop())
-    asyncio.create_task(run_background_loop("ALERTAS LOOP", poll_alertas_loop, startup_delay=0))
+    asyncio.create_task(
+        run_background_loop(
+            "ALERTAS LOOP",
+            poll_alertas_loop,
+            startup_delay=ALERT_STARTUP_DELAY_SECONDS,
+        )
+    )
 
 
 @app.on_event("shutdown")
