@@ -569,16 +569,57 @@ def _set_saih_rate_limit(reason: str) -> None:
     )
 
 
+async def ensure_prediction_point_from_latest_forecast(site_id: str) -> dict[str, Any]:
+    site = SITES_BY_ID.get(site_id)
+    if not site:
+        return {"checked": False, "stored": 0, "error": "site_not_found"}
+
+    try:
+        forecast = await asyncio.to_thread(prediction_store.latest_forecast, site_id)
+    except Exception as e:
+        print("[PREDICTION FORECAST BACKFILL LOAD ERROR]", site_id, repr(e))
+        return {"checked": False, "stored": 0, "error": str(e)}
+
+    predictions = (forecast or {}).get("predictions") or []
+    issued_at = (forecast or {}).get("issued_at")
+
+    if not predictions or not issued_at:
+        return {"checked": True, "stored": 0, "reason": "forecast_not_available"}
+
+    try:
+        stored = await asyncio.to_thread(
+            prediction_store.store_prediction,
+            site,
+            predictions,
+            issued_at,
+        )
+    except Exception as e:
+        print("[PREDICTION FORECAST BACKFILL STORE ERROR]", site_id, repr(e))
+        return {"checked": False, "stored": 0, "error": str(e)}
+
+    if stored:
+        ia_reliability_cache_by_site.pop(site_id, None)
+
+    return {
+        "checked": True,
+        "stored": stored,
+        "issued_at": issued_at,
+    }
+
+
 async def refresh_prediction_actuals_for_site(site_id: str) -> dict[str, Any]:
     site = SITES_BY_ID.get(site_id)
     if not site:
         return {"checked": False, "error": "site_not_found"}
+
+    backfill = await ensure_prediction_point_from_latest_forecast(site_id)
 
     cooldown_left = _saih_rate_limit_seconds_left()
     if cooldown_left > 0:
         return {
             "checked": False,
             "updated": 0,
+            "backfill": backfill,
             "skipped": "saih_rate_limited",
             "next_check_seconds": cooldown_left,
         }
@@ -595,7 +636,7 @@ async def refresh_prediction_actuals_for_site(site_id: str) -> dict[str, Any]:
     )
 
     if not pending_dates:
-        return {"checked": True, "pending_dates": 0, "updated": 0}
+        return {"checked": True, "pending_dates": 0, "updated": 0, "backfill": backfill}
 
     now_epoch = datetime.now().timestamp()
     last_epoch = prediction_actual_refresh_epoch_by_site.get(site_id)
@@ -609,6 +650,7 @@ async def refresh_prediction_actuals_for_site(site_id: str) -> dict[str, Any]:
             "checked": True,
             "pending_dates": len(pending_dates),
             "updated": 0,
+            "backfill": backfill,
             "skipped": "recently_checked",
             "next_check_seconds": round(PREDICTION_EVAL_MIN_REFRESH_SECONDS - (now_epoch - last_epoch)),
         }
@@ -619,6 +661,7 @@ async def refresh_prediction_actuals_for_site(site_id: str) -> dict[str, Any]:
             "checked": False,
             "pending_dates": len(pending_dates),
             "updated": 0,
+            "backfill": backfill,
             "error": "site_without_saih_signals",
         }
 
@@ -639,6 +682,7 @@ async def refresh_prediction_actuals_for_site(site_id: str) -> dict[str, Any]:
             "checked": False,
             "pending_dates": len(pending_dates),
             "updated": 0,
+            "backfill": backfill,
             "from": range_start.isoformat(),
             "to": range_end.isoformat(),
             "error": str(e),
@@ -648,6 +692,7 @@ async def refresh_prediction_actuals_for_site(site_id: str) -> dict[str, Any]:
         "checked": True,
         "pending_dates": len(pending_dates),
         "updated": updated,
+        "backfill": backfill,
         "from": range_start.isoformat(),
         "to": range_end.isoformat(),
     }
@@ -1979,8 +2024,6 @@ async def poll_prediction_evaluation_loop():
 
 
 async def poll_daily_prediction_loop():
-    startup_checked = False
-
     while True:
         try:
             if not PREDICTION_DAILY_REFRESH_ENABLED:
@@ -1995,17 +2038,6 @@ async def poll_daily_prediction_loop():
                 second=0,
                 microsecond=0,
             )
-
-            if not startup_checked:
-                startup_checked = True
-                startup_limit = scheduled + timedelta(seconds=PREDICTION_DAILY_STARTUP_GRACE_SECONDS)
-
-                if now > startup_limit:
-                    daily_prediction_dates_run.add(today_key)
-                    print(
-                        "[PREDICTION DAILY] Saltando batch inicial tras arranque tardio "
-                        f"({today_key}); se ejecutara en la proxima ventana programada."
-                    )
 
             if now >= scheduled and today_key not in daily_prediction_dates_run:
                 print(f"[PREDICTION DAILY] Guardando predicciones D+1 para {today_key}")

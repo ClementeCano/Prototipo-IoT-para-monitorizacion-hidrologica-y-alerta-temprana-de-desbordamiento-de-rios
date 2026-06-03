@@ -41,6 +41,24 @@ def _today() -> date:
         return date.today()
 
 
+def _date_from_issued_at(value: Optional[str]) -> date:
+    if not value:
+        return _today()
+
+    try:
+        parsed = datetime.fromisoformat(str(value).replace("Z", "+00:00"))
+    except ValueError:
+        return _today()
+
+    if parsed.tzinfo is not None:
+        try:
+            parsed = parsed.astimezone(ZoneInfo(os.getenv("ALERT_TIMEZONE", "Europe/Madrid")))
+        except Exception:
+            parsed = parsed.replace(tzinfo=None)
+
+    return parsed.date()
+
+
 def _float_or_none(value: Any) -> Optional[float]:
     try:
         if value is None:
@@ -93,7 +111,7 @@ def _prediction_rows(site: dict[str, Any], predictions: list[dict[str, Any]], is
         raise PredictionStoreError("site_id_required")
 
     now = issued_at or _iso_now()
-    issued_date = _today()
+    issued_date = _date_from_issued_at(now)
     rows = []
 
     for point in predictions or []:
