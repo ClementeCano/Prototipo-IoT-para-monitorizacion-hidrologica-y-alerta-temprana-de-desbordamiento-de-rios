@@ -607,7 +607,7 @@ async def ensure_prediction_point_from_latest_forecast(site_id: str) -> dict[str
     }
 
 
-async def refresh_prediction_actuals_for_site(site_id: str) -> dict[str, Any]:
+async def refresh_prediction_actuals_for_site(site_id: str, force: bool = False) -> dict[str, Any]:
     site = SITES_BY_ID.get(site_id)
     if not site:
         return {"checked": False, "error": "site_not_found"}
@@ -642,7 +642,8 @@ async def refresh_prediction_actuals_for_site(site_id: str) -> dict[str, Any]:
     last_epoch = prediction_actual_refresh_epoch_by_site.get(site_id)
 
     if (
-        last_epoch is not None
+        not force
+        and last_epoch is not None
         and PREDICTION_EVAL_MIN_REFRESH_SECONDS > 0
         and (now_epoch - last_epoch) < PREDICTION_EVAL_MIN_REFRESH_SECONDS
     ):
@@ -814,7 +815,11 @@ async def api_prediction_reliability(site_id: str):
     if site_id not in SITES_BY_ID:
         raise HTTPException(status_code=404, detail="site_not_found")
 
-    update_result = await refresh_prediction_actuals_for_site(site_id)
+    current_result = await asyncio.to_thread(prediction_store.evaluation, site_id, 30)
+    update_result = await refresh_prediction_actuals_for_site(
+        site_id,
+        force=not bool(current_result.get("points")),
+    )
     result = await asyncio.to_thread(prediction_store.evaluation, site_id, 30)
     result["generated_at"] = datetime.now().isoformat(timespec="seconds")
     result["storage_backend"] = getattr(prediction_store, "storage_backend", "json")

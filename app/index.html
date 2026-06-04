@@ -3064,6 +3064,7 @@
         reliabilityErr.style.display = "none";
         reliabilityErr.textContent = "";
       }
+      reliabilityErr.title = "";
     }
 
     function updateReliabilityChart(data) {
@@ -3073,13 +3074,24 @@
       const points = Array.isArray(data?.points) ? data.points : [];
 
       if (!points.length) {
-        const message = data?.error
-          ? `No hay validacion disponible: ${data.error}`
-          : data?.total > 0
-            ? "Hay predicciones D+1 guardadas. La grafica aparecera en cuanto SAIH devuelva lecturas reales del primer dia objetivo."
-            : "Aun no hay predicciones D+1 guardadas para comparar. Se guardaran automaticamente cada dia.";
+        const update = data?.update || {};
+        let message = "Aun no hay predicciones D+1 guardadas para comparar. Se guardaran automaticamente cada dia.";
+
+        if (data?.error) {
+          message = `No hay validacion disponible: ${data.error}`;
+        } else if (update.error) {
+          message = "SAIH Ebro no ha podido devolver los valores reales para completar la comparativa. No es un fallo de la web; se reintentara automaticamente.";
+        } else if (update.skipped === "saih_rate_limited") {
+          message = `SAIH Ebro ha limitado temporalmente las peticiones. Se reintentara automaticamente en ${update.next_check_seconds || "unos"} segundos.`;
+        } else if (update.skipped === "recently_checked") {
+          message = `Ya hay predicciones D+1 guardadas y se ha consultado SAIH hace poco. Se reintentara en ${update.next_check_seconds || "unos"} segundos.`;
+        } else if (data?.total > 0) {
+          message = "Hay predicciones D+1 guardadas, pero SAIH aun no ha devuelto valores reales utilizables para ese dia.";
+        }
+
         clearReliabilityChart(message);
         reliabilityErr.classList.add("info");
+        reliabilityErr.title = update.error || update.skipped || "";
         return;
       }
 
