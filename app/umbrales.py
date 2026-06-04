@@ -1,4 +1,13 @@
+import logging
 from pathlib import Path
+
+try:
+    from app.logging_config import configure_logging
+except ImportError:
+    from logging_config import configure_logging
+
+configure_logging()
+logger = logging.getLogger(__name__)
 
 BASE_DIR = Path(__file__).resolve().parent
 
@@ -10,8 +19,8 @@ def cargar_umbrales(path=None):
 
     path = Path(path)
 
-    print("📁 Ruta umbrales:", path)
-    print("✅ Existe:", path.exists())
+    logger.debug("Ruta umbrales: %s", path)
+    logger.debug("Existe umbrales: %s", path.exists())
 
     with open(path, "r", encoding="utf-8") as f:
         for linea in f:
@@ -21,7 +30,7 @@ def cargar_umbrales(path=None):
                 continue
 
             if "->" not in linea:
-                print(f"⚠️ Línea inválida: {linea}")
+                logger.warning("Linea de umbrales invalida: %s", linea)
                 continue
 
             municipio, valores = linea.split("->", 1)

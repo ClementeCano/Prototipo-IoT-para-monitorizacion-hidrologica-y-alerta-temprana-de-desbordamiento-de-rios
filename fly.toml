@@ -13,6 +13,8 @@ primary_region = 'cdg'
 
 [env]
   DATA_DIR = "/data"
+  LOG_LEVEL = "INFO"
+  ADMIN_DEBUG = "0"
   USERS_FILE = "/data/users.json"
   TOKENS_FILE = "/data/tokens.json"
   PREDICTIONS_FILE = "/data/predictions.json"

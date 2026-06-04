@@ -1,4 +1,5 @@
 import os
+import logging
 import smtplib
 import sys
 from datetime import datetime
@@ -8,6 +9,14 @@ from zoneinfo import ZoneInfo
 
 import firebase_admin
 from firebase_admin import messaging
+
+try:
+    from app.logging_config import configure_logging
+except ImportError:
+    from logging_config import configure_logging
+
+configure_logging()
+logger = logging.getLogger(__name__)
 
 for stream in (sys.stdout, sys.stderr):
     try:
@@ -207,7 +216,7 @@ def enviar_notificacion(tokens, titulo, cuerpo, tag="rio-ebro-alert", url="/"):
 
     if not firebase_admin._apps:
         error = "firebase_not_initialized"
-        print(f"❌ Error enviando push: {error}")
+        logger.error("Error enviando push: %s", error)
         return {
             "sent": sent,
             "invalid_tokens": invalid_tokens,
@@ -251,16 +260,16 @@ def enviar_notificacion(tokens, titulo, cuerpo, tag="rio-ebro-alert", url="/"):
 
             sent += 1
 
-            print(f"✅ Notificación enviada a {token[:15]}")
+            logger.info("Notificacion push enviada token_prefix=%s", token[:15])
 
         except Exception as e:
 
             if _is_invalid_token_error(e):
                 invalid_tokens.add(token)
-                print(f"[PUSH CLEANUP] Token invalido detectado: {token[:15]}")
+                logger.warning("PUSH CLEANUP: token invalido detectado token_prefix=%s", token[:15])
 
             errors.append(str(e))
-            print(f"❌ Error enviando push: {e}")
+            logger.exception("Error enviando push: %s", e)
 
 
     return {
@@ -298,7 +307,7 @@ def enviar_email(destinatario: str, asunto: str, cuerpo: str) -> dict[str, Any]:
 
         smtp.send_message(message)
 
-    print(f"✅ Email enviado a {destinatario}")
+    logger.info("Email enviado a %s", destinatario)
     return {"sent": 1}
 
 
@@ -412,7 +421,7 @@ def enviar_alerta_usuario(
         except Exception as exc:
             error = f"{site.get('id')}: {exc}"
             result["errors"].append(error)
-            print(f"❌ Error preparando alerta de {site.get('name')}: {exc}")
+            logger.exception("Error preparando alerta site=%s error=%s", site.get("name"), exc)
 
     if not site_alerts:
         result["skipped"] = True
@@ -430,7 +439,7 @@ def enviar_alerta_usuario(
             result["sent"] += email_result["sent"]
         except Exception as exc:
             result["errors"].append(str(exc))
-            print(f"❌ Error enviando email a {user.get('email')}: {exc}")
+            logger.exception("Error enviando email a %s: %s", user.get("email"), exc)
 
         return result
 
@@ -526,7 +535,7 @@ def enviar_alertas_diarias(tokens, sites, force=False):
         result["reason"] = f"outside_alert_time_{ALERT_HOUR:02d}_{ALERT_MINUTE:02d}"
         return result
 
-    print("🚨 ENVIANDO ALERTAS DIARIAS")
+    logger.info("ENVIANDO ALERTAS DIARIAS")
 
     # =========================
     # RECORRER MUNICIPIOS
@@ -576,14 +585,16 @@ def enviar_alertas_diarias(tokens, sites, force=False):
             result["errors"].extend(push_result.get("errors", []))
             result["processed_sites"] += 1
 
-            print(
-                f"📩 {nombre}: enviada a {push_result['sent']} usuarios "
-                f"({len(push_result['invalid_tokens'])} invalidos)"
+            logger.info(
+                "%s: alerta enviada a %s usuarios (%s invalidos)",
+                nombre,
+                push_result["sent"],
+                len(push_result["invalid_tokens"]),
             )
 
         except Exception as e:
 
-            print(f"❌ Error en alertas de {nombre}: {e}")
+            logger.exception("Error en alertas de %s: %s", nombre, e)
 
     # =========================
     # MARCAR COMO ENVIADO

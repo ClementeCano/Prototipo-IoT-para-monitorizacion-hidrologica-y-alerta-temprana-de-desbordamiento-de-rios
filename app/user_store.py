@@ -1,6 +1,7 @@
 import hashlib
 import hmac
 import json
+import logging
 import os
 import re
 import secrets
@@ -11,6 +12,14 @@ from threading import RLock
 from typing import Any, Optional
 from urllib.parse import quote_plus
 from zoneinfo import ZoneInfo
+
+try:
+    from app.logging_config import configure_logging
+except ImportError:
+    from logging_config import configure_logging
+
+configure_logging()
+logger = logging.getLogger(__name__)
 
 
 BASE_DIR = Path(__file__).resolve().parent
@@ -764,7 +773,7 @@ def create_user_store(sites_by_id: Optional[dict[str, Any]] = None):
         if os.getenv("MIGRATE_USERS_JSON_ON_START", "1").lower() in {"1", "true", "yes"}:
             imported = store.import_json_file(USERS_FILE)
             if imported:
-                print(f"[POSTGRES MIGRATION] Importados {imported} usuarios desde {USERS_FILE}")
+                logger.info("POSTGRES MIGRATION: importados %s usuarios desde %s", imported, USERS_FILE)
 
         return store
 

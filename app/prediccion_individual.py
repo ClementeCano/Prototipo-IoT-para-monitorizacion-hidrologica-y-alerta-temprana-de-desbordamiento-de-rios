@@ -1,6 +1,7 @@
 from pathlib import Path
 import pickle
 from datetime import date, timedelta
+import logging
 import os
 import time
 
@@ -13,13 +14,18 @@ os.environ.setdefault("TF_CPP_MIN_LOG_LEVEL", "2")
 try:
     from app.api.saih_opendata import fetch_saih_history
     from app.core.config import SITES
+    from app.logging_config import configure_logging
 except ImportError:
     from api.saih_opendata import fetch_saih_history
     from core.config import SITES
+    from logging_config import configure_logging
+
+configure_logging()
+logger = logging.getLogger(__name__)
 
 
 BASE_DIR = Path(__file__).resolve().parent
-print(f"BASE_DIR: {BASE_DIR}")
+logger.debug("BASE_DIR: %s", BASE_DIR)
 
 VENTANA = 14
 HORIZONTE = 7
@@ -59,7 +65,7 @@ def _load_prediction_artifacts(site_id: str):
     features_path = carpeta / "features.pkl"
 
     if not modelo_path.exists():
-        print(f"Modelo no encontrado para {site_id}")
+        logger.warning("Modelo no encontrado para site_id=%s", site_id)
         return None
 
     from tensorflow.keras.models import load_model
@@ -83,7 +89,7 @@ def _load_site_dataset(site_id: str):
     dataset_path = BASE_DIR / "datasets_modelo_municipios" / f"{site_id}.csv"
 
     if not dataset_path.exists():
-        print(f"Dataset no encontrado para {site_id}")
+        logger.warning("Dataset no encontrado para site_id=%s", site_id)
         return None
 
     df = pd.read_csv(dataset_path).dropna().reset_index(drop=True)
@@ -202,7 +208,7 @@ def _fallback_prediction_window(
             f"{reason}. Dataset local hasta {last_label}; no se usa como dato actual."
         )
 
-    print(f"IA {site_id}: usando dataset local como fallback ({reason})")
+    logger.warning("IA %s: usando dataset local como fallback (%s)", site_id, reason)
     return base_df
 
 
@@ -255,7 +261,7 @@ def _load_live_prediction_window(
         )
         live_df = _records_to_daily_dataset(site_id, records)
     except Exception as exc:
-        print(f"SAIH no disponible para ventana IA {site_id}: {exc}")
+        logger.warning("SAIH no disponible para ventana IA site_id=%s error=%s", site_id, exc)
         return _fallback_prediction_window(
             site_id,
             base_df,
@@ -291,7 +297,7 @@ def _load_live_prediction_window(
             allow_stale_fallback,
         )
 
-    print(f"IA {site_id}: usando ventana SAIH reciente hasta {combined['fecha'].iloc[-1]}")
+    logger.info("IA %s: usando ventana SAIH reciente hasta %s", site_id, combined["fecha"].iloc[-1])
     _LIVE_WINDOW_CACHE[site_id] = {"epoch": now, "df": combined}
     return combined.copy()
 
@@ -342,7 +348,7 @@ def predecir_semana_municipio(
         )
 
         if len(df) < VENTANA:
-            print(f"Muy pocos datos en {site_id}")
+            logger.warning("Muy pocos datos en site_id=%s", site_id)
             return []
 
         pred_nivel, pred_caudal = _predict_from_window(artifacts, df)
@@ -355,7 +361,7 @@ def predecir_semana_municipio(
     except RuntimeError:
         raise
     except Exception as e:
-        print(f"Error IA en {site_id}: {e}")
+        logger.exception("Error IA en site_id=%s error=%s", site_id, e)
         raise RuntimeError(f"prediction_model_error: {e}") from e
 
 
@@ -421,5 +427,5 @@ def evaluar_fiabilidad_municipio(site_id: str):
         }
 
     except Exception as e:
-        print(f"Error evaluando fiabilidad IA en {site_id}: {e}")
+        logger.exception("Error evaluando fiabilidad IA site_id=%s error=%s", site_id, e)
         return {"points": [], "metrics": {}, "error": str(e)}

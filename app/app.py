@@ -1,6 +1,7 @@
 import base64
 from io import BytesIO
 import json
+import logging
 import os
 import sys
 import unicodedata
@@ -10,6 +11,14 @@ from dotenv import load_dotenv
 load_dotenv()
 APP_DIR = Path(__file__).resolve().parent
 import traceback
+
+try:
+    from app.logging_config import configure_logging
+except ImportError:
+    from logging_config import configure_logging
+
+configure_logging()
+logger = logging.getLogger(__name__)
 
 for stream in (sys.stdout, sys.stderr):
     try:
@@ -26,7 +35,7 @@ try:
     firebase_json = os.getenv("FIREBASE_CREDENTIALS_JSON")
     firebase_json_base64 = os.getenv("FIREBASE_CREDENTIALS_JSON_BASE64")
 
-    print("🔥 Firebase path:", firebase_path)
+    logger.info("Firebase credentials source configured: %s", bool(firebase_path or firebase_json or firebase_json_base64))
 
     firebase_cred_source = None
 
@@ -59,10 +68,10 @@ try:
 
     firebase_admin.initialize_app(cred)
 
-    print("✅ Firebase inicializado")
+    logger.info("Firebase inicializado")
 
 except Exception as e:
-    print("❌ Error Firebase:", e)
+    logger.exception("Error inicializando Firebase: %s", e)
 
 from datetime import date, datetime, timedelta
 import asyncio
@@ -109,14 +118,14 @@ from collections import defaultdict
 
 # 🔥 usar ruta absoluta estable
 BASE_DIR = Path(__file__).resolve().parent
+STATIC_DIR = BASE_DIR / "static"
 DATA_DIR = Path(os.getenv("DATA_DIR", BASE_DIR)).resolve()
 DATA_DIR.mkdir(parents=True, exist_ok=True)
 
 TOKENS_FILE = Path(os.getenv("TOKENS_FILE", DATA_DIR / "tokens.json")).resolve()
 TOKENS_FILE.parent.mkdir(parents=True, exist_ok=True)
-print("DATA_DIR:", DATA_DIR)
-
-print("📁 TOKENS_FILE:", TOKENS_FILE)
+logger.info("DATA_DIR: %s", DATA_DIR)
+logger.info("TOKENS_FILE: %s", TOKENS_FILE)
 
 
 def cargar_tokens():
@@ -128,7 +137,7 @@ def cargar_tokens():
         # =========================
         if not TOKENS_FILE.exists():
 
-            print("⚠️ tokens.json no existe, creando...")
+            logger.warning("tokens.json no existe, creando archivo vacio")
 
             with open(TOKENS_FILE, "w", encoding="utf-8") as f:
 
@@ -143,7 +152,7 @@ def cargar_tokens():
 
             data = json.load(f)
 
-        print(f"✅ Tokens cargados: {len(data)} municipios")
+        logger.info("Tokens cargados: %s municipios", len(data))
 
         return defaultdict(
             set,
@@ -155,7 +164,7 @@ def cargar_tokens():
 
     except Exception as e:
 
-        print("❌ Error cargando tokens:", repr(e))
+        logger.exception("Error cargando tokens: %r", e)
 
         return defaultdict(set)
 
@@ -187,12 +196,12 @@ def guardar_tokens():
 
         total = sum(len(v) for v in serializable.values())
 
-        print(f"💾 Tokens guardados ({total} tokens)")
+        logger.info("Tokens guardados: %s tokens", total)
         return True
 
     except Exception as e:
 
-        print("❌ Error guardando tokens:", repr(e))
+        logger.exception("Error guardando tokens: %r", e)
         return False
 
 
@@ -216,16 +225,17 @@ def limpiar_tokens_invalidos(invalid_tokens):
         removed += before - len(site_tokens)
 
     if removed:
-        print(
-            f"[PUSH CLEANUP] Eliminadas {removed} suscripciones invalidas "
-            f"({len(invalid_tokens)} tokens unicos)"
+        logger.info(
+            "PUSH CLEANUP: eliminadas %s suscripciones invalidas (%s tokens unicos)",
+            removed,
+            len(invalid_tokens),
         )
         guardar_tokens()
 
     try:
         removed += user_store.remove_invalid_tokens(invalid_tokens)
     except Exception as e:
-        print("[PUSH CLEANUP] Error limpiando tokens de usuarios:", repr(e))
+        logger.exception("PUSH CLEANUP: error limpiando tokens de usuarios: %r", e)
 
     return removed
 
@@ -268,15 +278,16 @@ PREDICTION_DAILY_REFRESH_HOUR = int(os.getenv("PREDICTION_DAILY_REFRESH_HOUR", "
 PREDICTION_DAILY_REFRESH_MINUTE = int(os.getenv("PREDICTION_DAILY_REFRESH_MINUTE", "0"))
 PREDICTION_DAILY_CHECK_SECONDS = int(os.getenv("PREDICTION_DAILY_CHECK_SECONDS", "600"))
 PREDICTION_DAILY_STARTUP_GRACE_SECONDS = int(os.getenv("PREDICTION_DAILY_STARTUP_GRACE_SECONDS", "1800"))
+ADMIN_DEBUG = os.getenv("ADMIN_DEBUG", "0").lower() in {"1", "true", "yes"}
 
 app = FastAPI()
-app.mount("/static", StaticFiles(directory=BASE_DIR), name="static")
+app.mount("/static", StaticFiles(directory=STATIC_DIR), name="static")
 
 SITES_BY_ID = {s["id"]: s for s in SITES}
 user_store = create_user_store(sites_by_id=SITES_BY_ID)
-print("USER_STORE:", getattr(user_store, "storage_backend", "json"), user_store.path)
+logger.info("USER_STORE: %s %s", getattr(user_store, "storage_backend", "json"), user_store.path)
 prediction_store = create_prediction_store()
-print("PREDICTION_STORE:", getattr(prediction_store, "storage_backend", "json"), prediction_store.path)
+logger.info("PREDICTION_STORE: %s %s", getattr(prediction_store, "storage_backend", "json"), prediction_store.path)
 
 try:
     stored_token_map = user_store.token_site_map()
@@ -284,7 +295,7 @@ try:
         tokens = defaultdict(set, stored_token_map)
         guardar_tokens()
 except Exception as e:
-    print("[PUSH TOKEN SYNC] Error sincronizando tokens desde usuarios:", repr(e))
+    logger.exception("PUSH TOKEN SYNC: error sincronizando tokens desde usuarios: %r", e)
 
 SESSION_COOKIE_NAME = os.getenv("SESSION_COOKIE_NAME", "rio_session")
 SESSION_COOKIE_SECURE = os.getenv("SESSION_COOKIE_SECURE", "0").lower() in {"1", "true", "yes"}
@@ -302,6 +313,11 @@ def _require_user(request: Request) -> dict:
         raise HTTPException(status_code=401, detail="auth_required")
 
     return user
+
+
+def _require_admin_debug() -> None:
+    if not ADMIN_DEBUG:
+        raise HTTPException(status_code=404, detail="not_found")
 
 
 def _set_session_cookie(response: Response, token: str) -> None:
@@ -564,9 +580,10 @@ def _set_saih_rate_limit(reason: str) -> None:
             "saih_error_detail": reason,
         }
 
-    print(
-        "[SAIH RATE LIMIT] cooldown="
-        f"{SAIH_RATE_LIMIT_COOLDOWN_SECONDS}s reason={reason}"
+    logger.warning(
+        "SAIH RATE LIMIT: cooldown=%ss reason=%s",
+        SAIH_RATE_LIMIT_COOLDOWN_SECONDS,
+        reason,
     )
 
 
@@ -578,7 +595,7 @@ async def ensure_prediction_point_from_latest_forecast(site_id: str) -> dict[str
     try:
         forecast = await asyncio.to_thread(prediction_store.latest_forecast, site_id)
     except Exception as e:
-        print("[PREDICTION FORECAST BACKFILL LOAD ERROR]", site_id, repr(e))
+        logger.exception("PREDICTION FORECAST BACKFILL LOAD ERROR site_id=%s error=%r", site_id, e)
         return {"checked": False, "stored": 0, "error": str(e)}
 
     predictions = (forecast or {}).get("predictions") or []
@@ -595,7 +612,7 @@ async def ensure_prediction_point_from_latest_forecast(site_id: str) -> dict[str
             issued_at,
         )
     except Exception as e:
-        print("[PREDICTION FORECAST BACKFILL STORE ERROR]", site_id, repr(e))
+        logger.exception("PREDICTION FORECAST BACKFILL STORE ERROR site_id=%s error=%r", site_id, e)
         return {"checked": False, "stored": 0, "error": str(e)}
 
     if stored:
@@ -665,7 +682,7 @@ async def refresh_prediction_actuals_for_site(site_id: str, force: bool = False)
         )
         updated = await asyncio.to_thread(prediction_store.update_actuals, site_id, actuals)
     except Exception as e:
-        print("[PREDICTION EVAL ERROR]", site_id, repr(e))
+        logger.exception("PREDICTION EVAL ERROR site_id=%s error=%r", site_id, e)
 
         return {
             "checked": False,
@@ -746,7 +763,7 @@ def _stored_ia(site_id: str) -> Dict[str, Any]:
     try:
         forecast = prediction_store.latest_forecast(site_id)
     except Exception as e:
-        print("[PREDICTION FORECAST LOAD ERROR]", site_id, repr(e))
+        logger.exception("PREDICTION FORECAST LOAD ERROR site_id=%s error=%r", site_id, e)
         return _default_ia(store_checked=True)
 
     if not forecast:
@@ -766,7 +783,7 @@ def _stored_saih(site_id: str) -> Dict[str, Any]:
     try:
         actual = prediction_store.latest_actual(site_id)
     except Exception as e:
-        print("[SAIH STORED ACTUAL LOAD ERROR]", site_id, repr(e))
+        logger.exception("SAIH STORED ACTUAL LOAD ERROR site_id=%s error=%r", site_id, e)
         actual = None
 
     if not actual:
@@ -931,7 +948,7 @@ async def api_history_download(
     try:
         records = await asyncio.to_thread(fetch_saih_history, tags, range_start, range_end)
     except Exception as e:
-        print("[SAIH HISTORY ERROR]", repr(e))
+        logger.exception("SAIH HISTORY ERROR site_id=%s from=%s to=%s error=%r", site_id, range_start, range_end, e)
         return JSONResponse(
             {
                 "ok": False,
@@ -1129,6 +1146,7 @@ def api_email_config():
 
 @app.post("/api/push-debug")
 async def push_debug(data: dict):
+    _require_admin_debug()
     safe_data = {
         "event": data.get("event"),
         "permission": data.get("permission"),
@@ -1144,7 +1162,7 @@ async def push_debug(data: dict):
         "href": data.get("href"),
         "userAgent": data.get("userAgent"),
     }
-    print("[PUSH DEBUG]", json.dumps(safe_data, ensure_ascii=False))
+    logger.debug("PUSH DEBUG %s", json.dumps(safe_data, ensure_ascii=False))
     return {"ok": True}
 
 
@@ -1162,7 +1180,7 @@ def _persist_push_subscription(
         if site in SITES_BY_ID and site not in valid_sites:
             valid_sites.append(site)
         else:
-            print(f"⚠️ Site ignorado: {site!r}")
+            logger.warning("Site ignorado en suscripcion push: %r", site)
 
     public_user = user_store.save_push_subscription(
         user["id"],
@@ -1177,7 +1195,7 @@ def _persist_push_subscription(
 
     for site in valid_sites:
         tokens[site].add(token)
-        print(f"🔥 Token guardado en {site}")
+        logger.debug("Token push guardado en site=%s token_prefix=%s", site, token[:15])
 
     if not guardar_tokens():
         raise RuntimeError("tokens_storage_error")
@@ -1193,7 +1211,7 @@ def _persist_push_subscription(
 @app.post("/api/token")
 async def save_token(data: dict, request: Request):
 
-    print("[PUSH TOKEN] Token recibido")
+    logger.debug("PUSH TOKEN: token recibido")
 
     user = _require_user(request)
 
@@ -1204,19 +1222,22 @@ async def save_token(data: dict, request: Request):
 
     if not token:
 
-        print("[PUSH TOKEN] Token vacio")
+        logger.warning("PUSH TOKEN: token vacio")
 
         return JSONResponse({"ok": False, "error": "token_empty"}, status_code=400)
 
     if not isinstance(sites, list):
 
-        print("[PUSH TOKEN] Sites invalidos")
+        logger.warning("PUSH TOKEN: sites invalidos")
 
         return JSONResponse({"ok": False, "error": "sites_must_be_list"}, status_code=400)
 
-    print(
-        f"[PUSH TOKEN] prefix={token[:15]} "
-        f"sites={len(sites)} platform={client_platform or '-'} ua={user_agent or '-'}"
+    logger.info(
+        "PUSH TOKEN: prefix=%s sites=%s platform=%s ua=%s",
+        token[:15],
+        len(sites),
+        client_platform or "-",
+        user_agent or "-",
     )
 
     try:
@@ -1241,7 +1262,7 @@ async def save_token(data: dict, request: Request):
             )
         raise
     except Exception as e:
-        print(f"[PUSH TOKEN ERROR] user_store={user_store.path} error={repr(e)}")
+        logger.exception("PUSH TOKEN ERROR user_store=%s error=%r", user_store.path, e)
         return JSONResponse(
             {
                 "ok": False,
@@ -1266,7 +1287,7 @@ async def test_token(data: dict, request: Request):
     if not token:
         return JSONResponse({"ok": False, "error": "token_empty"}, status_code=400)
 
-    print(f"[PUSH TEST] Enviando prueba solo a {token[:15]}")
+    logger.info("PUSH TEST: enviando prueba a token_prefix=%s", token[:15])
 
     result = await asyncio.to_thread(
         alertas.enviar_notificacion,
@@ -1347,7 +1368,12 @@ async def test_selected_alerts(data: dict, request: Request):
 
         temp_user["devices"] = [{"token": token}]
 
-    print(f"[ALERT TEST] user={user.get('email')} channel={preferences.get('notification_channel')} sites={valid_sites}")
+    logger.info(
+        "ALERT TEST user=%s channel=%s sites=%s",
+        user.get("email"),
+        preferences.get("notification_channel"),
+        valid_sites,
+    )
 
     result = await asyncio.to_thread(
         alertas.enviar_alerta_usuario,
@@ -1372,6 +1398,7 @@ async def test_selected_alerts(data: dict, request: Request):
 
 @app.get("/test-alerts-now")
 async def test_alerts_now(request: Request, sites: Optional[str] = None, all_sites: bool = False):
+    _require_admin_debug()
     user = _require_user(request)
 
     alert_sites = _filter_alert_sites(sites, allow_all=all_sites)
@@ -1425,13 +1452,14 @@ async def test_alerts_now(request: Request, sites: Optional[str] = None, all_sit
 
 @app.get("/test-alert")
 async def test_alert(request: Request, sites: Optional[str] = None, all_sites: bool = False):
+    _require_admin_debug()
     return await test_alerts_now(request=request, sites=sites, all_sites=all_sites)
 
 
 @app.get("/firebase-messaging-sw.js")
 def sw():
     return Response(
-        ((BASE_DIR / "firebase-messaging-sw.js").read_text(encoding="utf-8")),
+        ((STATIC_DIR / "firebase-messaging-sw.js").read_text(encoding="utf-8")),
         media_type="application/javascript",
         headers={"Cache-Control": "no-cache"},
     )
@@ -1439,7 +1467,7 @@ def sw():
 
 @app.get("/manifest.webmanifest")
 def manifest():
-    return FileResponse(BASE_DIR / "manifest.webmanifest", media_type="application/manifest+json")
+    return FileResponse(STATIC_DIR / "manifest.webmanifest", media_type="application/manifest+json")
 
 
 # ---------------------------
@@ -1536,7 +1564,7 @@ async def refresh_ia_for_site(
     allow_stale_fallback: Optional[bool] = None,
 ) -> bool:
     if site_id in ia_inflight:
-        print(f"IA ya en curso para {site_id}")
+        logger.debug("IA ya en curso para site_id=%s", site_id)
         return False
 
     now_epoch = datetime.now().timestamp()
@@ -1553,7 +1581,7 @@ async def refresh_ia_for_site(
 
     ia_inflight.add(site_id)
 
-    print("🚀 IA para:", site_id)
+    logger.info("IA refresh iniciado site_id=%s", site_id)
 
     try:
         pred = await _run_prediction(
@@ -1585,7 +1613,7 @@ async def refresh_ia_for_site(
                     )
                     ia_reliability_cache_by_site.pop(site_id, None)
             except Exception as e:
-                print("[PREDICTION STORE ERROR]", site_id, repr(e))
+                logger.exception("PREDICTION STORE ERROR site_id=%s error=%r", site_id, e)
 
         ia_cache_by_site[site_id] = {
             "ia_refreshed_at": datetime.now().isoformat(timespec="seconds"),
@@ -1611,7 +1639,7 @@ async def refresh_ia_for_site(
             "pred_semana_pending": False,
         }
 
-        traceback.print_exc()
+        logger.exception("Error refrescando IA site_id=%s error=%r", site_id, e)
         return False
 
     finally:
@@ -1679,7 +1707,7 @@ def send_notification(title: str, body: str):
 
         all_tokens.update(site_tokens)
 
-    print(f"📤 Enviando push a {len(all_tokens)} dispositivos")
+    logger.info("Enviando push a %s dispositivos", len(all_tokens))
 
     for token in list(all_tokens):
 
@@ -1697,11 +1725,11 @@ def send_notification(title: str, body: str):
 
             response = messaging.send(message)
 
-            print("✅ PUSH OK:", response)
+            logger.debug("PUSH OK response=%s", response)
 
         except Exception as e:
 
-            print("❌ Error enviando:", e)
+            logger.exception("Error enviando push: %s", e)
 
             # 🔥 ELIMINAR TOKENS INVÁLIDOS
             for site_tokens in tokens.values():
@@ -1860,7 +1888,7 @@ def _update_saih_cache_for_site(
                 ts,
             )
         except Exception as e:
-            print("[SAIH ACTUAL STORE ERROR]", sid, repr(e))
+            logger.exception("SAIH ACTUAL STORE ERROR site_id=%s error=%r", sid, e)
 
 
 async def aggregate_stored_actuals() -> int:
@@ -1871,7 +1899,7 @@ async def aggregate_stored_actuals() -> int:
             SAIH_ACTUAL_SAMPLE_RETENTION_DAYS,
         )
     except Exception as e:
-        print("[SAIH ACTUAL AGGREGATE ERROR]", repr(e))
+        logger.exception("SAIH ACTUAL AGGREGATE ERROR error=%r", e)
         return 0
 
 
@@ -1918,7 +1946,7 @@ async def refresh_saih_for_site(site_id: str) -> bool:
         _update_saih_cache_for_site(site, signals, [])
         await aggregate_stored_actuals()
     except Exception as e:
-        print("[SAIH SITE ERROR]", site_id, repr(e))
+        logger.exception("SAIH SITE ERROR site_id=%s error=%r", site_id, e)
         if _is_saih_rate_limit_error(e):
             _set_saih_rate_limit(str(e))
 
@@ -1944,7 +1972,7 @@ async def _refresh_saih_cache_once():
     try:
         cooldown_left = _saih_rate_limit_seconds_left()
         if cooldown_left > 0:
-            print(f"[SAIH RATE LIMIT] refresco global omitido, quedan {cooldown_left}s")
+            logger.warning("SAIH RATE LIMIT: refresco global omitido, quedan %ss", cooldown_left)
             return
 
         tags = collect_all_tags()
@@ -1966,7 +1994,7 @@ async def _refresh_saih_cache_once():
                 )
                 all_signals.update(signals)
             except Exception as e:
-                print("[SAIH ERROR batch]", repr(e))
+                logger.exception("SAIH ERROR batch error=%r", e)
                 batch_errors.append(str(e))
                 if _is_saih_rate_limit_error(e):
                     _set_saih_rate_limit(str(e))
@@ -1980,7 +2008,7 @@ async def _refresh_saih_cache_once():
         await aggregate_stored_actuals()
 
     except Exception as e:
-        print("[SAIH ERROR]", repr(e))
+        logger.exception("SAIH ERROR global error=%r", e)
         if _is_saih_rate_limit_error(e):
             _set_saih_rate_limit(str(e))
 
@@ -2050,7 +2078,7 @@ async def poll_aemet_loop():
                 await refresh_aemet_for_site(sid, force=False)
 
         except Exception as e:
-            print("[AEMET LOOP ERROR]", repr(e))
+            logger.exception("AEMET LOOP ERROR error=%r", e)
 
         await asyncio.sleep(AEMET_CHECK_SECONDS)
 
@@ -2060,7 +2088,7 @@ async def poll_prediction_evaluation_loop():
             for site in SITES:
                 await refresh_prediction_actuals_for_site(site["id"])
         except Exception as e:
-            print("[PREDICTION EVAL LOOP ERROR]", repr(e))
+            logger.exception("PREDICTION EVAL LOOP ERROR error=%r", e)
 
         await asyncio.sleep(PREDICTION_EVAL_CHECK_SECONDS)
 
@@ -2082,7 +2110,7 @@ async def poll_daily_prediction_loop():
             )
 
             if now >= scheduled and today_key not in daily_prediction_dates_run:
-                print(f"[PREDICTION DAILY] Guardando predicciones D+1 para {today_key}")
+                logger.info("PREDICTION DAILY: guardando predicciones D+1 para %s", today_key)
 
                 for site in SITES:
                     await refresh_ia_for_site(site["id"], force=True)
@@ -2091,7 +2119,7 @@ async def poll_daily_prediction_loop():
                 daily_prediction_dates_run.add(today_key)
 
         except Exception as e:
-            print("[PREDICTION DAILY LOOP ERROR]", repr(e))
+            logger.exception("PREDICTION DAILY LOOP ERROR error=%r", e)
 
         await asyncio.sleep(PREDICTION_DAILY_CHECK_SECONDS)
 
@@ -2107,7 +2135,7 @@ async def poll_daily_prediction_loop():
 #             for sid in active_sites:
 #                 await refresh_ia_for_site(sid)
 #         except Exception as e:
-#             print("[IA LOOP ERROR]", repr(e))
+#             logger.exception("IA LOOP ERROR error=%r", e)
 
 #         await asyncio.sleep(3600)
 
@@ -2134,15 +2162,16 @@ async def poll_alertas_loop():
                 if int(user_result.get("sent", 0)) > 0:
                     user_store.mark_alert_result(user_id, user_result)
                 else:
-                    print(
-                        "[ALERTAS LOOP] No se marca como enviada "
-                        f"user_id={user_id} reason={user_result.get('reason')} "
-                        f"errors={user_result.get('errors')}"
+                    logger.info(
+                        "ALERTAS LOOP: no se marca como enviada user_id=%s reason=%s errors=%s",
+                        user_id,
+                        user_result.get("reason"),
+                        user_result.get("errors"),
                     )
 
         except Exception as e:
 
-            print("[ALERTAS ERROR]", e)
+            logger.exception("ALERTAS ERROR: %s", e)
 
         await asyncio.sleep(ALERT_CHECK_SECONDS)
 
@@ -2158,8 +2187,7 @@ async def run_background_loop(name: str, loop_factory, startup_delay: Optional[i
     except asyncio.CancelledError:
         raise
     except Exception as e:
-        print(f"[{name} FATAL]", repr(e))
-        traceback.print_exc()
+        logger.exception("%s FATAL error=%r", name, e)
 
 
 @app.on_event("startup")

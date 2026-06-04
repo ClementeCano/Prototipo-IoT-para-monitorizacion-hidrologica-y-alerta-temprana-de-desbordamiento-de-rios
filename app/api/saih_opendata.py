@@ -1,5 +1,6 @@
 import os
 import time
+import logging
 from datetime import date, timedelta
 from typing import Dict, Any, List
 
@@ -9,6 +10,14 @@ from requests.adapters import HTTPAdapter
 
 import urllib3
 from urllib3.exceptions import InsecureRequestWarning
+
+try:
+    from app.logging_config import configure_logging
+except ImportError:
+    from logging_config import configure_logging
+
+configure_logging()
+logger = logging.getLogger(__name__)
 
 # Opcional: en algunos Windows evita problemas de certificados
 try:
@@ -99,7 +108,7 @@ def _safe_get(url: str, params: dict, timeout=(6, 20), attempts: int = 2, max_se
 
         if verify is False and not _WARNED_INSECURE_SSL:
             urllib3.disable_warnings(InsecureRequestWarning)
-            print("[SAIH SSL] Usando fallback sin verificacion SSL para saihebro.com")
+            logger.warning("SAIH SSL: usando fallback sin verificacion SSL para saihebro.com")
             _WARNED_INSECURE_SSL = True
 
         for attempt in range(1, max(1, attempts) + 1):
