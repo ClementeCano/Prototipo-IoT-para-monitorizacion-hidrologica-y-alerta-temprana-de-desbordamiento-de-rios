@@ -778,22 +778,6 @@
     font-weight:900;
   }
 
-  .scroll-card{
-    max-height: 320px;
-    overflow-y: auto;
-    padding-right: 6px;
-  }
-
-  /* scroll bonito */
-  .scroll-card::-webkit-scrollbar{
-    width: 6px;
-  }
-
-  .scroll-card::-webkit-scrollbar-thumb{
-    background: rgba(255,255,255,.2);
-    border-radius: 10px;
-  }
-
 </style>
 </head>
 
@@ -1150,7 +1134,7 @@
       </div>
 
       <!-- LLUVIA -->
-      <div class="card scroll-card">
+      <div class="card">
         <h3 class="sectiontitle">🌧️ Lluvia (AEMET)</h3>
 
         <div class="row">
@@ -1165,9 +1149,8 @@
 
         <div class="kpi">
           <div>
-            <div class="label">6h</div>
+            <div class="label">Acumulado 6h</div>
             <div class="big"><span id="mm6sum">-</span></div>
-            <div class="muted">Max: <span id="mm6max">-</span></div>
           </div>
 
           <div class="barwrap">
@@ -1179,9 +1162,8 @@
           </div>
 
           <div>
-            <div class="label">24h</div>
+            <div class="label">Acumulado 24h</div>
             <div class="big"><span id="mm24sum">-</span></div>
-            <div class="muted">Max: <span id="mm24max">-</span></div>
           </div>
         </div>
 
@@ -1193,11 +1175,6 @@
           <div class="bar"><div id="barP24"></div></div>
         </div>
 
-        <!-- 🔥 tabla necesaria -->
-        <table>
-          <thead><tr><th>Hora</th><th>mm</th></tr></thead>
-          <tbody id="mmTable"></tbody>
-        </table>
       </div>
 
     </div>
@@ -1367,15 +1344,12 @@
 
     const mm6sum = document.getElementById("mm6sum");
     const mm24sum = document.getElementById("mm24sum");
-    const mm6max = document.getElementById("mm6max");
-    const mm24max = document.getElementById("mm24max");
 
     const p6 = document.getElementById("p6");
     const p24 = document.getElementById("p24");
     const barP6 = document.getElementById("barP6");
     const barP24 = document.getElementById("barP24");
 
-    const mmTable = document.getElementById("mmTable");
     const rainDot = document.getElementById("rainDot");
     const rainState = document.getElementById("rainState");
 
@@ -2814,21 +2788,6 @@
       barP24.style.width = (c24 === null ? "0%" : `${c24}%`);
     }
 
-    function renderMmTable(list) {
-      mmTable.innerHTML = "";
-
-      if (!Array.isArray(list)) return;
-
-      for (const row of list.slice(0, 12)) {
-        const tr = document.createElement("tr");
-        tr.innerHTML = `
-          <td class="mono">${row?.hora ?? "-"}</td>
-          <td>${row?.mm ?? "-"}</td>
-        `;
-        mmTable.appendChild(tr);
-      }
-    }
-
     function setRainState(mm24, p24) {
       const mm = Number(mm24);
       const prob = clampProb(p24);
@@ -3080,13 +3039,13 @@
         if (data?.error) {
           message = `No hay validacion disponible: ${data.error}`;
         } else if (update.error) {
-          message = "SAIH Ebro no ha podido devolver los valores reales para completar la comparativa. No es un fallo de la web; se reintentara automaticamente.";
+          message = "No se han podido leer las medias diarias guardadas para completar la comparativa. Se reintentara automaticamente.";
         } else if (update.skipped === "saih_rate_limited") {
           message = `SAIH Ebro ha limitado temporalmente las peticiones. Se reintentara automaticamente en ${update.next_check_seconds || "unos"} segundos.`;
         } else if (update.skipped === "recently_checked") {
-          message = `Ya hay predicciones D+1 guardadas y se ha consultado SAIH hace poco. Se reintentara en ${update.next_check_seconds || "unos"} segundos.`;
+          message = `Ya hay predicciones D+1 guardadas y las medias diarias se han revisado hace poco. Se reintentara en ${update.next_check_seconds || "unos"} segundos.`;
         } else if (data?.total > 0) {
-          message = "Hay predicciones D+1 guardadas, pero SAIH aun no ha devuelto valores reales utilizables para ese dia.";
+          message = "Hay predicciones D+1 guardadas, pero aun no existe una media diaria real para ese dia.";
         }
 
         clearReliabilityChart(message);
@@ -3099,8 +3058,13 @@
       if (data.update?.error) {
         reliabilityErr.classList.add("info");
         reliabilityErr.style.display = "block";
-        reliabilityErr.textContent = "Mostrando la comparativa guardada. SAIH Ebro no ha podido actualizar ahora mismo; no es un fallo de la web.";
+        reliabilityErr.textContent = "Mostrando la comparativa guardada. Las medias diarias reales no se han podido actualizar ahora mismo.";
         reliabilityErr.title = data.update.error;
+      } else if ((data.pending || 0) > 0) {
+        reliabilityErr.classList.add("info");
+        reliabilityErr.style.display = "block";
+        reliabilityErr.textContent = "Mostrando predicciones guardadas. Los valores reales apareceran cuando exista la media diaria persistida.";
+        reliabilityErr.title = data.update?.skipped || "";
       } else {
         reliabilityErr.classList.remove("info");
         reliabilityErr.style.display = "none";
@@ -3222,12 +3186,12 @@
       clearReliabilityChart();
       setChartLoading(reliabilityChartLoading, true, [
         "Buscando predicciones D+1",
-        "Consultando valores reales SAIH",
+        "Leyendo medias diarias reales",
         "Calculando error medio"
       ]);
       reliabilityErr.classList.add("info");
       reliabilityErr.style.display = "block";
-      reliabilityErr.textContent = "Actualizando comparativa con datos reales de SAIH...";
+      reliabilityErr.textContent = "Actualizando comparativa con datos reales guardados...";
 
       try {
         const data = await apiJson(`/api/prediction/reliability/${encodeURIComponent(siteId)}`);
@@ -3473,14 +3437,11 @@
 
         mm6sum.textContent = data.aemet_mm_6h_sum ?? "-";
         mm24sum.textContent = data.aemet_mm_24h_sum ?? "-";
-        mm6max.textContent = data.aemet_mm_6h_max ?? "-";
-        mm24max.textContent = data.aemet_mm_24h_max ?? "-";
 
         p6.textContent = data.aemet_prob_6h_max ?? "-";
         p24.textContent = data.aemet_prob_24h_max ?? "-";
 
         setProbBars(data.aemet_prob_6h_max, data.aemet_prob_24h_max);
-        renderMmTable(data.aemet_mm_next_hours);
         setRainState(data.aemet_mm_24h_sum, data.aemet_prob_24h_max);
 
         window._lastIaRef = data.ia_refreshed_at ?? "-";

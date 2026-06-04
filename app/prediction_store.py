@@ -59,6 +59,31 @@ def _date_from_issued_at(value: Optional[str]) -> date:
     return parsed.date()
 
 
+def _parse_datetime(value: Any) -> Optional[datetime]:
+    if isinstance(value, datetime):
+        return value.replace(tzinfo=None)
+
+    if not value:
+        return None
+
+    try:
+        parsed = datetime.fromisoformat(str(value).replace("Z", "+00:00"))
+    except ValueError:
+        return None
+
+    if parsed.tzinfo is not None:
+        parsed = parsed.astimezone(ZoneInfo(os.getenv("ALERT_TIMEZONE", "Europe/Madrid"))).replace(tzinfo=None)
+
+    return parsed.replace(microsecond=0)
+
+
+def _hour_bucket(value: Any) -> Optional[datetime]:
+    parsed = _parse_datetime(value)
+    if not parsed:
+        return None
+    return parsed.replace(minute=0, second=0, microsecond=0)
+
+
 def _float_or_none(value: Any) -> Optional[float]:
     try:
         if value is None:
@@ -161,10 +186,16 @@ def _metrics(points: list[dict[str, Any]]) -> dict[str, Any]:
         if point.get("caudal_real") is not None and point.get("caudal_pred") is not None
     ]
 
+    samples = sum(
+        1
+        for point in points
+        if point.get("nivel_real") is not None or point.get("caudal_real") is not None
+    )
+
     return {
         "nivel_mae": round(sum(nivel_errors) / len(nivel_errors), 3) if nivel_errors else None,
         "caudal_mae": round(sum(caudal_errors) / len(caudal_errors), 3) if caudal_errors else None,
-        "samples": len(points),
+        "samples": samples,
     }
 
 
@@ -239,6 +270,98 @@ def _public_forecast(record: Optional[dict[str, Any]]) -> Optional[dict[str, Any
     }
 
 
+def _sample_record(site: dict[str, Any], nivel_m: Any, caudal_m3s: Any, observed_at: Any) -> Optional[dict[str, Any]]:
+    site_id = str((site or {}).get("id") or "").strip()
+    if not site_id:
+        return None
+
+    bucket = _hour_bucket(observed_at)
+    if not bucket:
+        return None
+
+    nivel = _float_or_none(nivel_m)
+    caudal = _float_or_none(caudal_m3s)
+    if nivel is None and caudal is None:
+        return None
+
+    now = _iso_now()
+    hour = bucket.isoformat(timespec="seconds")
+    return {
+        "id": f"{site_id}:{hour}",
+        "siteId": site_id,
+        "site": str((site or {}).get("name") or site_id),
+        "sampleHour": hour,
+        "observedAt": _parse_datetime(observed_at).isoformat(timespec="seconds"),
+        "nivelM": nivel,
+        "caudalM3s": caudal,
+        "updatedAt": now,
+    }
+
+
+def _daily_record_from_samples(site_id: str, site_name: str, actual_date: date, samples: list[dict[str, Any]]) -> Optional[dict[str, Any]]:
+    nivel_values = [_float_or_none(item.get("nivelM")) for item in samples]
+    caudal_values = [_float_or_none(item.get("caudalM3s")) for item in samples]
+    nivel_values = [value for value in nivel_values if value is not None]
+    caudal_values = [value for value in caudal_values if value is not None]
+
+    if not nivel_values and not caudal_values:
+        return None
+
+    now = _iso_now()
+    return {
+        "siteId": site_id,
+        "site": site_name or site_id,
+        "actualDate": actual_date.isoformat(),
+        "nivelM": round(sum(nivel_values) / len(nivel_values), 3) if nivel_values else None,
+        "caudalM3s": round(sum(caudal_values) / len(caudal_values), 3) if caudal_values else None,
+        "sampleCount": max(len(nivel_values), len(caudal_values)),
+        "updatedAt": now,
+    }
+
+
+def _public_latest_actual(record: Optional[dict[str, Any]]) -> Optional[dict[str, Any]]:
+    if not record:
+        return None
+
+    return {
+        "site_id": record.get("siteId"),
+        "site": record.get("site"),
+        "observed_at": record.get("observedAt"),
+        "sample_hour": record.get("sampleHour"),
+        "nivel_m": record.get("nivelM"),
+        "caudal_m3s": record.get("caudalM3s"),
+    }
+
+
+def _combined_latest_actual(records: list[dict[str, Any]]) -> Optional[dict[str, Any]]:
+    items = [record for record in records if isinstance(record, dict)]
+    if not items:
+        return None
+
+    items.sort(
+        key=lambda item: str(item.get("observedAt") or item.get("sampleHour") or ""),
+        reverse=True,
+    )
+    latest = items[0]
+    nivel_record = next(
+        (item for item in items if _float_or_none(item.get("nivelM")) is not None),
+        None,
+    )
+    caudal_record = next(
+        (item for item in items if _float_or_none(item.get("caudalM3s")) is not None),
+        None,
+    )
+
+    return _public_latest_actual({
+        "siteId": latest.get("siteId"),
+        "site": latest.get("site"),
+        "observedAt": latest.get("observedAt"),
+        "sampleHour": latest.get("sampleHour"),
+        "nivelM": nivel_record.get("nivelM") if nivel_record else None,
+        "caudalM3s": caudal_record.get("caudalM3s") if caudal_record else None,
+    })
+
+
 class JsonPredictionStore:
     storage_backend = "json"
 
@@ -248,7 +371,13 @@ class JsonPredictionStore:
         self.path.parent.mkdir(parents=True, exist_ok=True)
 
     def _empty_data(self) -> dict[str, Any]:
-        return {"version": 1, "predictions": [], "forecasts": []}
+        return {
+            "version": 1,
+            "predictions": [],
+            "forecasts": [],
+            "actualSamples": [],
+            "dailyActuals": [],
+        }
 
     def _load_unlocked(self) -> dict[str, Any]:
         if not self.path.exists():
@@ -267,6 +396,8 @@ class JsonPredictionStore:
         data.setdefault("version", 1)
         data.setdefault("predictions", [])
         data.setdefault("forecasts", [])
+        data.setdefault("actualSamples", [])
+        data.setdefault("dailyActuals", [])
         return data
 
     def _save_unlocked(self, data: dict[str, Any]) -> None:
@@ -335,6 +466,133 @@ class JsonPredictionStore:
 
         forecasts.sort(key=lambda item: item.get("updatedAt", ""), reverse=True)
         return _public_forecast(forecasts[0])
+
+    def store_actual_sample(self, site: dict[str, Any], nivel_m: Any, caudal_m3s: Any, observed_at: Any) -> int:
+        record = _sample_record(site, nivel_m, caudal_m3s, observed_at)
+        if not record:
+            return 0
+
+        with self.lock:
+            data = self._load_unlocked()
+            existing = {
+                item.get("id"): item
+                for item in data.get("actualSamples", [])
+                if isinstance(item, dict) and item.get("id")
+            }
+            existing[record["id"]] = record
+            data["actualSamples"] = sorted(
+                existing.values(),
+                key=lambda item: (item.get("siteId", ""), item.get("sampleHour", "")),
+                reverse=True,
+            )[:10000]
+            self._save_unlocked(data)
+
+        return 1
+
+    def latest_actual(self, site_id: str) -> Optional[dict[str, Any]]:
+        with self.lock:
+            data = self._load_unlocked()
+            samples = [
+                item
+                for item in data.get("actualSamples", [])
+                if isinstance(item, dict) and item.get("siteId") == site_id
+            ]
+
+        if samples:
+            return _combined_latest_actual(samples)
+
+        daily = [
+            {
+                "siteId": item.get("siteId"),
+                "site": item.get("site"),
+                "sampleHour": item.get("actualDate"),
+                "observedAt": item.get("actualDate"),
+                "nivelM": item.get("nivelM"),
+                "caudalM3s": item.get("caudalM3s"),
+            }
+            for item in data.get("dailyActuals", [])
+            if isinstance(item, dict) and item.get("siteId") == site_id
+        ]
+        return _combined_latest_actual(daily)
+
+    def aggregate_daily_actuals(self, up_to_date: Optional[date] = None, retention_days: int = 2) -> int:
+        up_to_date = up_to_date or (_today() - timedelta(days=1))
+        retention_cutoff = up_to_date - timedelta(days=max(0, int(retention_days or 0)))
+
+        with self.lock:
+            data = self._load_unlocked()
+            grouped: dict[tuple[str, str], list[dict[str, Any]]] = {}
+
+            for sample in data.get("actualSamples", []):
+                if not isinstance(sample, dict):
+                    continue
+                sample_hour = _parse_datetime(sample.get("sampleHour"))
+                if not sample_hour:
+                    continue
+                sample_date = sample_hour.date()
+                if sample_date > up_to_date:
+                    continue
+                grouped.setdefault(
+                    (str(sample.get("siteId")), sample_date.isoformat()),
+                    [],
+                ).append(sample)
+
+            existing = {
+                (item.get("siteId"), item.get("actualDate")): item
+                for item in data.get("dailyActuals", [])
+                if isinstance(item, dict) and item.get("siteId") and item.get("actualDate")
+            }
+
+            updated = 0
+            for (site_id, day), samples in grouped.items():
+                site_name = samples[0].get("site") or site_id
+                record = _daily_record_from_samples(site_id, site_name, date.fromisoformat(day), samples)
+                if record:
+                    existing[(site_id, day)] = record
+                    updated += 1
+
+            data["dailyActuals"] = sorted(
+                existing.values(),
+                key=lambda item: (item.get("siteId", ""), item.get("actualDate", "")),
+                reverse=True,
+            )[:5000]
+
+            data["actualSamples"] = [
+                sample
+                for sample in data.get("actualSamples", [])
+                if isinstance(sample, dict)
+                and (_parse_datetime(sample.get("sampleHour")) or datetime.max).date() >= retention_cutoff
+            ]
+
+            if updated:
+                self._save_unlocked(data)
+
+        return updated
+
+    def daily_actuals_by_date(self, site_id: str, dates: list[date]) -> dict[str, dict[str, Any]]:
+        wanted = {day.isoformat() for day in dates}
+        if not wanted:
+            return {}
+
+        with self.lock:
+            data = self._load_unlocked()
+            records = [
+                item
+                for item in data.get("dailyActuals", [])
+                if isinstance(item, dict)
+                and item.get("siteId") == site_id
+                and item.get("actualDate") in wanted
+            ]
+
+        return {
+            str(record.get("actualDate")): {
+                "nivel_m": record.get("nivelM"),
+                "caudal_m3s": record.get("caudalM3s"),
+                "observed_at": record.get("actualDate"),
+                "sample_count": record.get("sampleCount"),
+            }
+            for record in records
+        }
 
     def pending_actual_dates(
         self,
@@ -418,11 +676,6 @@ class JsonPredictionStore:
                 if record.get("siteId") == site_id and int(record.get("horizonDay") or 0) == 1
             ]
 
-        evaluated = [
-            record
-            for record in records
-            if record.get("nivelReal") is not None or record.get("caudalReal") is not None
-        ]
         pending = sum(
             1
             for record in records
@@ -432,9 +685,9 @@ class JsonPredictionStore:
                 record.get("caudalPred") is not None and record.get("caudalReal") is None
             )
         )
-        evaluated.sort(key=lambda item: (item.get("targetDate", ""), item.get("issuedDate", ""), item.get("horizonDay", 0)))
-        evaluated = evaluated[-max(1, min(int(limit or 30), 90)):]
-        points = [_public_point(record) for record in evaluated]
+        records.sort(key=lambda item: (item.get("targetDate", ""), item.get("issuedDate", ""), item.get("horizonDay", 0)))
+        records = records[-max(1, min(int(limit or 30), 90)):]
+        points = [_public_point(record) for record in records]
 
         return {
             "points": points,
@@ -510,6 +763,32 @@ class PostgresPredictionStore:
                         predictions JSONB NOT NULL,
                         updated_at TEXT NOT NULL,
                         source TEXT NOT NULL DEFAULT 'model'
+                    );
+
+                    CREATE TABLE IF NOT EXISTS hydrology_actual_samples (
+                        id TEXT PRIMARY KEY,
+                        site_id TEXT NOT NULL,
+                        site_name TEXT NOT NULL,
+                        sample_hour TIMESTAMP NOT NULL,
+                        observed_at TEXT NOT NULL,
+                        nivel_m DOUBLE PRECISION,
+                        caudal_m3s DOUBLE PRECISION,
+                        updated_at TEXT NOT NULL,
+                        UNIQUE(site_id, sample_hour)
+                    );
+
+                    CREATE INDEX IF NOT EXISTS idx_hydrology_samples_site_hour
+                        ON hydrology_actual_samples(site_id, sample_hour);
+
+                    CREATE TABLE IF NOT EXISTS hydrology_daily_actuals (
+                        site_id TEXT NOT NULL,
+                        site_name TEXT NOT NULL,
+                        actual_date DATE NOT NULL,
+                        nivel_m DOUBLE PRECISION,
+                        caudal_m3s DOUBLE PRECISION,
+                        sample_count INTEGER NOT NULL DEFAULT 0,
+                        updated_at TEXT NOT NULL,
+                        PRIMARY KEY(site_id, actual_date)
                     );
                     """
                 )
@@ -613,6 +892,175 @@ class PostgresPredictionStore:
             "source": row["source"],
         })
 
+    def store_actual_sample(self, site: dict[str, Any], nivel_m: Any, caudal_m3s: Any, observed_at: Any) -> int:
+        record = _sample_record(site, nivel_m, caudal_m3s, observed_at)
+        if not record:
+            return 0
+
+        with self._connection() as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    """
+                    INSERT INTO hydrology_actual_samples (
+                        id, site_id, site_name, sample_hour, observed_at,
+                        nivel_m, caudal_m3s, updated_at
+                    )
+                    VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
+                    ON CONFLICT (site_id, sample_hour) DO UPDATE SET
+                        site_name = EXCLUDED.site_name,
+                        observed_at = EXCLUDED.observed_at,
+                        nivel_m = COALESCE(EXCLUDED.nivel_m, hydrology_actual_samples.nivel_m),
+                        caudal_m3s = COALESCE(EXCLUDED.caudal_m3s, hydrology_actual_samples.caudal_m3s),
+                        updated_at = EXCLUDED.updated_at
+                    """,
+                    (
+                        record["id"],
+                        record["siteId"],
+                        record["site"],
+                        record["sampleHour"],
+                        record["observedAt"],
+                        record["nivelM"],
+                        record["caudalM3s"],
+                        record["updatedAt"],
+                    ),
+                )
+
+        return 1
+
+    def latest_actual(self, site_id: str) -> Optional[dict[str, Any]]:
+        with self._connection() as conn:
+            with conn.cursor(cursor_factory=RealDictCursor) as cur:
+                cur.execute(
+                    """
+                    SELECT site_id, site_name, sample_hour, observed_at, nivel_m, caudal_m3s
+                    FROM hydrology_actual_samples
+                    WHERE site_id = %s
+                    ORDER BY sample_hour DESC
+                    LIMIT 200
+                    """,
+                    (site_id,),
+                )
+                rows = [dict(row) for row in cur.fetchall()]
+
+        if rows:
+            return _combined_latest_actual([
+                {
+                    "siteId": row["site_id"],
+                    "site": row["site_name"],
+                    "sampleHour": row["sample_hour"].isoformat(timespec="seconds")
+                    if hasattr(row["sample_hour"], "isoformat")
+                    else str(row["sample_hour"]),
+                    "observedAt": row["observed_at"],
+                    "nivelM": row["nivel_m"],
+                    "caudalM3s": row["caudal_m3s"],
+                }
+                for row in rows
+            ])
+
+        with self._connection() as conn:
+            with conn.cursor(cursor_factory=RealDictCursor) as cur:
+                cur.execute(
+                    """
+                    SELECT site_id, site_name, actual_date, nivel_m, caudal_m3s
+                    FROM hydrology_daily_actuals
+                    WHERE site_id = %s
+                    ORDER BY actual_date DESC
+                    LIMIT 30
+                    """,
+                    (site_id,),
+                )
+                rows = [dict(row) for row in cur.fetchall()]
+
+        return _combined_latest_actual([
+            {
+                "siteId": row["site_id"],
+                "site": row["site_name"],
+                "sampleHour": row["actual_date"].isoformat()
+                if hasattr(row["actual_date"], "isoformat")
+                else str(row["actual_date"]),
+                "observedAt": row["actual_date"].isoformat()
+                if hasattr(row["actual_date"], "isoformat")
+                else str(row["actual_date"]),
+                "nivelM": row["nivel_m"],
+                "caudalM3s": row["caudal_m3s"],
+            }
+            for row in rows
+        ])
+
+    def aggregate_daily_actuals(self, up_to_date: Optional[date] = None, retention_days: int = 2) -> int:
+        up_to_date = up_to_date or (_today() - timedelta(days=1))
+        retention_cutoff = up_to_date - timedelta(days=max(0, int(retention_days or 0)))
+        now = _iso_now()
+
+        with self._connection() as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    """
+                    INSERT INTO hydrology_daily_actuals (
+                        site_id, site_name, actual_date, nivel_m, caudal_m3s, sample_count, updated_at
+                    )
+                    SELECT site_id,
+                           MAX(site_name) AS site_name,
+                           sample_hour::date AS actual_date,
+                           AVG(nivel_m) FILTER (WHERE nivel_m IS NOT NULL) AS nivel_m,
+                           AVG(caudal_m3s) FILTER (WHERE caudal_m3s IS NOT NULL) AS caudal_m3s,
+                           GREATEST(COUNT(nivel_m), COUNT(caudal_m3s))::integer AS sample_count,
+                           %s AS updated_at
+                    FROM hydrology_actual_samples
+                    WHERE sample_hour::date <= %s
+                    GROUP BY site_id, sample_hour::date
+                    HAVING COUNT(nivel_m) > 0 OR COUNT(caudal_m3s) > 0
+                    ON CONFLICT (site_id, actual_date) DO UPDATE SET
+                        site_name = EXCLUDED.site_name,
+                        nivel_m = ROUND(EXCLUDED.nivel_m::numeric, 3)::double precision,
+                        caudal_m3s = ROUND(EXCLUDED.caudal_m3s::numeric, 3)::double precision,
+                        sample_count = EXCLUDED.sample_count,
+                        updated_at = EXCLUDED.updated_at
+                    """,
+                    (now, up_to_date),
+                )
+                updated = cur.rowcount
+                cur.execute(
+                    """
+                    DELETE FROM hydrology_actual_samples
+                    WHERE sample_hour::date < %s
+                    """,
+                    (retention_cutoff,),
+                )
+
+        return updated
+
+    def daily_actuals_by_date(self, site_id: str, dates: list[date]) -> dict[str, dict[str, Any]]:
+        if not dates:
+            return {}
+
+        with self._connection() as conn:
+            with conn.cursor(cursor_factory=RealDictCursor) as cur:
+                cur.execute(
+                    """
+                    SELECT actual_date, nivel_m, caudal_m3s, sample_count
+                    FROM hydrology_daily_actuals
+                    WHERE site_id = %s
+                      AND actual_date = ANY(%s)
+                    """,
+                    (site_id, dates),
+                )
+                rows = [dict(row) for row in cur.fetchall()]
+
+        return {
+            row["actual_date"].isoformat()
+            if hasattr(row["actual_date"], "isoformat")
+            else str(row["actual_date"]): {
+                "nivel_m": row["nivel_m"],
+                "caudal_m3s": row["caudal_m3s"],
+                "observed_at": row["actual_date"].isoformat()
+                if hasattr(row["actual_date"], "isoformat")
+                else str(row["actual_date"]),
+                "sample_count": row["sample_count"],
+            }
+            for row in rows
+        }
+
     def pending_actual_dates(
         self,
         site_id: str,
@@ -710,7 +1158,6 @@ class PostgresPredictionStore:
                     FROM prediction_points
                     WHERE site_id = %s
                       AND horizon_day = 1
-                      AND (nivel_real IS NOT NULL OR caudal_real IS NOT NULL)
                     ORDER BY target_date DESC, issued_date DESC, horizon_day DESC
                     LIMIT %s
                     """,

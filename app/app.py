@@ -242,6 +242,7 @@ SAIH_REQUEST_MAX_SECONDS = float(os.getenv("SAIH_REQUEST_MAX_SECONDS", "15"))
 SAIH_RATE_LIMIT_COOLDOWN_SECONDS = int(os.getenv("SAIH_RATE_LIMIT_COOLDOWN_SECONDS", "300"))
 SAIH_REFRESH_ON_WS = os.getenv("SAIH_REFRESH_ON_WS", "0").lower() in {"1", "true", "yes"}
 SAIH_SITE_REFRESH_MIN_SECONDS = int(os.getenv("SAIH_SITE_REFRESH_MIN_SECONDS", "300"))
+SAIH_ACTUAL_SAMPLE_RETENTION_DAYS = int(os.getenv("SAIH_ACTUAL_SAMPLE_RETENTION_DAYS", "2"))
 
 # AEMET: refresco real cada 30 min, comprobación cada 60s
 AEMET_REFRESH_SECONDS = 1800
@@ -613,16 +614,7 @@ async def refresh_prediction_actuals_for_site(site_id: str, force: bool = False)
         return {"checked": False, "error": "site_not_found"}
 
     backfill = await ensure_prediction_point_from_latest_forecast(site_id)
-
-    cooldown_left = _saih_rate_limit_seconds_left()
-    if cooldown_left > 0:
-        return {
-            "checked": False,
-            "updated": 0,
-            "backfill": backfill,
-            "skipped": "saih_rate_limited",
-            "next_check_seconds": cooldown_left,
-        }
+    aggregate_result = await aggregate_stored_actuals()
 
     today = _today_madrid()
     max_date = today if PREDICTION_EVAL_INCLUDE_TODAY else today - timedelta(days=1)
@@ -636,7 +628,14 @@ async def refresh_prediction_actuals_for_site(site_id: str, force: bool = False)
     )
 
     if not pending_dates:
-        return {"checked": True, "pending_dates": 0, "updated": 0, "backfill": backfill}
+        return {
+            "checked": True,
+            "pending_dates": 0,
+            "updated": 0,
+            "backfill": backfill,
+            "daily_aggregates": aggregate_result,
+            "source": "stored_daily_actuals",
+        }
 
     now_epoch = datetime.now().timestamp()
     last_epoch = prediction_actual_refresh_epoch_by_site.get(site_id)
@@ -652,40 +651,28 @@ async def refresh_prediction_actuals_for_site(site_id: str, force: bool = False)
             "pending_dates": len(pending_dates),
             "updated": 0,
             "backfill": backfill,
+            "daily_aggregates": aggregate_result,
             "skipped": "recently_checked",
             "next_check_seconds": round(PREDICTION_EVAL_MIN_REFRESH_SECONDS - (now_epoch - last_epoch)),
         }
 
-    tags = _prediction_actual_tags(site)
-    if not tags:
-        return {
-            "checked": False,
-            "pending_dates": len(pending_dates),
-            "updated": 0,
-            "backfill": backfill,
-            "error": "site_without_saih_signals",
-        }
-
-    range_start = min(pending_dates)
-    range_end = max(pending_dates)
-
     try:
         prediction_actual_refresh_epoch_by_site[site_id] = now_epoch
-        records = await asyncio.to_thread(fetch_saih_history, tags, range_start, range_end)
-        actuals = _daily_actuals_from_records(site, records)
+        actuals = await asyncio.to_thread(
+            prediction_store.daily_actuals_by_date,
+            site_id,
+            pending_dates,
+        )
         updated = await asyncio.to_thread(prediction_store.update_actuals, site_id, actuals)
     except Exception as e:
         print("[PREDICTION EVAL ERROR]", site_id, repr(e))
-        if _is_saih_rate_limit_error(e):
-            _set_saih_rate_limit(str(e))
 
         return {
             "checked": False,
             "pending_dates": len(pending_dates),
             "updated": 0,
             "backfill": backfill,
-            "from": range_start.isoformat(),
-            "to": range_end.isoformat(),
+            "daily_aggregates": aggregate_result,
             "error": str(e),
         }
 
@@ -694,8 +681,10 @@ async def refresh_prediction_actuals_for_site(site_id: str, force: bool = False)
         "pending_dates": len(pending_dates),
         "updated": updated,
         "backfill": backfill,
-        "from": range_start.isoformat(),
-        "to": range_end.isoformat(),
+        "daily_aggregates": aggregate_result,
+        "daily_actual_dates": len(actuals),
+        "source": "stored_daily_actuals",
+        "skipped": None if actuals else "daily_actuals_not_available",
     }
 
 
@@ -772,10 +761,16 @@ def _stored_ia(site_id: str) -> Dict[str, Any]:
         "pred_semana_pending": False,
     }
 
-def _init_caches():
-    for s in SITES:
-        sid = s["id"]
-        saih_cache_by_site.setdefault(sid, {
+
+def _stored_saih(site_id: str) -> Dict[str, Any]:
+    try:
+        actual = prediction_store.latest_actual(site_id)
+    except Exception as e:
+        print("[SAIH STORED ACTUAL LOAD ERROR]", site_id, repr(e))
+        actual = None
+
+    if not actual:
+        return {
             "ts": None,
             "nivel_m": None,
             "caudal_m3s": None,
@@ -783,7 +778,23 @@ def _init_caches():
             "tendencia_caudal": None,
             "saih_error": None,
             "saih_error_detail": None,
-        })
+        }
+
+    return {
+        "ts": actual.get("observed_at"),
+        "nivel_m": actual.get("nivel_m"),
+        "caudal_m3s": actual.get("caudal_m3s"),
+        "tendencia_nivel": None,
+        "tendencia_caudal": None,
+        "saih_error": None,
+        "saih_error_detail": None,
+    }
+
+
+def _init_caches():
+    for s in SITES:
+        sid = s["id"]
+        saih_cache_by_site.setdefault(sid, _stored_saih(sid))
         aemet_cache_by_site.setdefault(sid, {**_default_aemet(), "_epoch": None})
         ia_cache_by_site.setdefault(sid, _stored_ia(sid))
 
@@ -1829,7 +1840,7 @@ def _update_saih_cache_for_site(
         saih_error = None
         saih_error_detail = None
 
-    saih_cache_by_site[sid] = {
+    cache_entry = {
         "ts": ts or prev.get("ts"),
         "nivel_m": (nivel.get("valor") if valid_nivel else prev.get("nivel_m")),
         "caudal_m3s": (caudal.get("valor") if valid_caudal else prev.get("caudal_m3s")),
@@ -1838,6 +1849,30 @@ def _update_saih_cache_for_site(
         "saih_error": saih_error,
         "saih_error_detail": saih_error_detail,
     }
+    saih_cache_by_site[sid] = cache_entry
+
+    if ts and (valid_nivel or valid_caudal):
+        try:
+            prediction_store.store_actual_sample(
+                site,
+                nivel.get("valor") if valid_nivel else None,
+                caudal.get("valor") if valid_caudal else None,
+                ts,
+            )
+        except Exception as e:
+            print("[SAIH ACTUAL STORE ERROR]", sid, repr(e))
+
+
+async def aggregate_stored_actuals() -> int:
+    try:
+        return await asyncio.to_thread(
+            prediction_store.aggregate_daily_actuals,
+            _today_madrid() - timedelta(days=1),
+            SAIH_ACTUAL_SAMPLE_RETENTION_DAYS,
+        )
+    except Exception as e:
+        print("[SAIH ACTUAL AGGREGATE ERROR]", repr(e))
+        return 0
 
 
 async def refresh_saih_for_site(site_id: str) -> bool:
@@ -1881,6 +1916,7 @@ async def refresh_saih_for_site(site_id: str) -> bool:
             SAIH_REQUEST_MAX_SECONDS,
         )
         _update_saih_cache_for_site(site, signals, [])
+        await aggregate_stored_actuals()
     except Exception as e:
         print("[SAIH SITE ERROR]", site_id, repr(e))
         if _is_saih_rate_limit_error(e):
@@ -1941,6 +1977,7 @@ async def _refresh_saih_cache_once():
 
         for s in SITES:
             _update_saih_cache_for_site(s, all_signals, batch_errors)
+        await aggregate_stored_actuals()
 
     except Exception as e:
         print("[SAIH ERROR]", repr(e))
