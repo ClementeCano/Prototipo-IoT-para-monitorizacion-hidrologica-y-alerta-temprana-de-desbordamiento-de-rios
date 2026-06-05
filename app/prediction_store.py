@@ -594,6 +594,34 @@ class JsonPredictionStore:
             for record in records
         }
 
+    def recent_daily_actuals(self, site_id: str, limit: int = 60) -> list[dict[str, Any]]:
+        limit = max(1, min(int(limit or 60), 365))
+
+        with self.lock:
+            data = self._load_unlocked()
+            records = [
+                item
+                for item in data.get("dailyActuals", [])
+                if isinstance(item, dict)
+                and item.get("siteId") == site_id
+                and _float_or_none(item.get("nivelM")) is not None
+                and _float_or_none(item.get("caudalM3s")) is not None
+            ]
+
+        records.sort(key=lambda item: str(item.get("actualDate") or ""), reverse=True)
+        records = list(reversed(records[:limit]))
+
+        return [
+            {
+                "fecha": record.get("actualDate"),
+                "nivel_m": record.get("nivelM"),
+                "caudal_m3s": record.get("caudalM3s"),
+                "lluvia_mm": 0.0,
+                "desbordamiento": 0,
+            }
+            for record in records
+        ]
+
     def pending_actual_dates(
         self,
         site_id: str,
@@ -1060,6 +1088,40 @@ class PostgresPredictionStore:
             }
             for row in rows
         }
+
+    def recent_daily_actuals(self, site_id: str, limit: int = 60) -> list[dict[str, Any]]:
+        limit = max(1, min(int(limit or 60), 365))
+
+        with self._connection() as conn:
+            with conn.cursor(cursor_factory=RealDictCursor) as cur:
+                cur.execute(
+                    """
+                    SELECT actual_date, nivel_m, caudal_m3s
+                    FROM hydrology_daily_actuals
+                    WHERE site_id = %s
+                      AND nivel_m IS NOT NULL
+                      AND caudal_m3s IS NOT NULL
+                    ORDER BY actual_date DESC
+                    LIMIT %s
+                    """,
+                    (site_id, limit),
+                )
+                rows = [dict(row) for row in cur.fetchall()]
+
+        rows.reverse()
+
+        return [
+            {
+                "fecha": row["actual_date"].isoformat()
+                if hasattr(row["actual_date"], "isoformat")
+                else str(row["actual_date"]),
+                "nivel_m": row["nivel_m"],
+                "caudal_m3s": row["caudal_m3s"],
+                "lluvia_mm": 0.0,
+                "desbordamiento": 0,
+            }
+            for row in rows
+        ]
 
     def pending_actual_dates(
         self,

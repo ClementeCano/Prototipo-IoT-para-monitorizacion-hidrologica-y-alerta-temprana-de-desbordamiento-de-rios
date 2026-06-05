@@ -34,12 +34,18 @@ LIVE_SAIH_CACHE_SECONDS = int(os.getenv("PREDICTION_LIVE_SAIH_CACHE_SECONDS", "1
 LIVE_SAIH_REQUEST_TIMEOUT_SECONDS = float(os.getenv("PREDICTION_LIVE_SAIH_REQUEST_TIMEOUT_SECONDS", "5"))
 LIVE_SAIH_MAX_SECONDS = float(os.getenv("PREDICTION_LIVE_SAIH_MAX_SECONDS", "25"))
 USE_LIVE_SAIH_WINDOW = os.getenv("PREDICTION_USE_LIVE_SAIH", "1").lower() in {"1", "true", "yes"}
+USE_STORED_DAILY_WINDOW = os.getenv("PREDICTION_USE_STORED_DAILY", "1").lower() in {"1", "true", "yes"}
+STORED_DAILY_LOOKBACK_DAYS = int(os.getenv("PREDICTION_STORED_DAILY_LOOKBACK_DAYS", "60"))
+STORED_DAILY_MIN_DAYS = int(os.getenv("PREDICTION_STORED_DAILY_MIN_DAYS", str(VENTANA + 1)))
+STORED_DAILY_CACHE_SECONDS = int(os.getenv("PREDICTION_STORED_DAILY_CACHE_SECONDS", "300"))
 MAX_DATASET_STALENESS_DAYS = int(os.getenv("PREDICTION_MAX_DATASET_STALENESS_DAYS", "14"))
 ALLOW_STALE_DATASET_FALLBACK = os.getenv("PREDICTION_ALLOW_STALE_DATASET_FALLBACK", "0").lower() in {"1", "true", "yes"}
 SITES_BY_ID = {site["id"]: site for site in SITES}
 _ARTIFACT_CACHE = {}
 _DATASET_CACHE = {}
 _LIVE_WINDOW_CACHE = {}
+_STORED_DAILY_CACHE = {}
+_PREDICTION_STORE = None
 
 
 def _none_if_invalid(value):
@@ -170,6 +176,71 @@ def _records_to_daily_dataset(site_id: str, records: list[dict]) -> pd.DataFrame
     return daily[["fecha", "nivel_m", "caudal_m3s", "lluvia_mm", "desbordamiento"]]
 
 
+def _get_prediction_store():
+    global _PREDICTION_STORE
+
+    if _PREDICTION_STORE is not None:
+        return _PREDICTION_STORE
+
+    try:
+        from app.prediction_store import create_prediction_store
+    except ImportError:
+        from prediction_store import create_prediction_store
+
+    _PREDICTION_STORE = create_prediction_store()
+    return _PREDICTION_STORE
+
+
+def _load_stored_daily_prediction_window(site_id: str) -> pd.DataFrame | None:
+    if not USE_STORED_DAILY_WINDOW:
+        return None
+
+    now = time.time()
+    cached = _STORED_DAILY_CACHE.get(site_id)
+    if cached and (now - cached["epoch"]) < STORED_DAILY_CACHE_SECONDS:
+        return cached["df"].copy()
+
+    try:
+        store = _get_prediction_store()
+        records = store.recent_daily_actuals(site_id, STORED_DAILY_LOOKBACK_DAYS)
+    except Exception as exc:
+        logger.warning("IA %s: no se pudieron leer medias diarias persistidas: %s", site_id, exc)
+        return None
+
+    min_days = max(VENTANA + 1, min(int(STORED_DAILY_MIN_DAYS or VENTANA + 1), STORED_DAILY_LOOKBACK_DAYS))
+    if len(records) < min_days:
+        return None
+
+    df = pd.DataFrame(records)
+    if df.empty:
+        return None
+
+    for column in ["fecha", "nivel_m", "caudal_m3s", "lluvia_mm", "desbordamiento"]:
+        if column not in df.columns:
+            df[column] = 0.0 if column in {"lluvia_mm", "desbordamiento"} else np.nan
+
+    df["fecha_dt"] = pd.to_datetime(df["fecha"], errors="coerce")
+    df = (
+        df.dropna(subset=["fecha_dt"])
+        .sort_values("fecha_dt")
+        .drop_duplicates(subset=["fecha"], keep="last")
+        .reset_index(drop=True)
+    )
+
+    if len(df) < min_days:
+        return None
+
+    df = _add_model_features(df)
+    df = df.dropna().reset_index(drop=True)
+
+    if len(df) < VENTANA:
+        return None
+
+    logger.info("IA %s: usando medias diarias persistidas hasta %s", site_id, df["fecha"].iloc[-1])
+    _STORED_DAILY_CACHE[site_id] = {"epoch": now, "df": df}
+    return df.copy()
+
+
 def _dataset_last_date(df: pd.DataFrame):
     if df is None or df.empty or "fecha" not in df.columns:
         return None
@@ -218,6 +289,10 @@ def _load_live_prediction_window(
     use_live_saih: bool | None = None,
     allow_stale_fallback: bool | None = None,
 ) -> pd.DataFrame:
+    stored_df = _load_stored_daily_prediction_window(site_id)
+    if stored_df is not None:
+        return stored_df
+
     use_live = USE_LIVE_SAIH_WINDOW if use_live_saih is None else bool(use_live_saih)
 
     if not use_live:

@@ -269,7 +269,12 @@ IA_REFRESH_ON_WS = os.getenv("IA_REFRESH_ON_WS", "0").lower() in {"1", "true", "
 IA_BOOTSTRAP_ON_WS = os.getenv("IA_BOOTSTRAP_ON_WS", "1").lower() in {"1", "true", "yes"}
 IA_EXECUTOR = ProcessPoolExecutor(max_workers=IA_WORKERS) if IA_PROCESS_POOL_ENABLED else None
 HISTORY_DOWNLOAD_MAX_DAYS = int(os.getenv("HISTORY_DOWNLOAD_MAX_DAYS", "366"))
+HISTORY_CACHE_SECONDS = int(os.getenv("HISTORY_CACHE_SECONDS", "3600"))
+HISTORY_CACHE_MAX_ITEMS = int(os.getenv("HISTORY_CACHE_MAX_ITEMS", "32"))
+HISTORY_CACHE_MAX_BYTES = int(os.getenv("HISTORY_CACHE_MAX_BYTES", str(10 * 1024 * 1024)))
 PREDICTION_EVAL_LOOKBACK_DAYS = int(os.getenv("PREDICTION_EVAL_LOOKBACK_DAYS", "30"))
+RELIABILITY_CACHE_SECONDS = int(os.getenv("RELIABILITY_CACHE_SECONDS", "3600"))
+PREDICTION_RELIABILITY_PRECACHE = os.getenv("PREDICTION_RELIABILITY_PRECACHE", "1").lower() in {"1", "true", "yes"}
 PREDICTION_EVAL_CHECK_SECONDS = int(os.getenv("PREDICTION_EVAL_CHECK_SECONDS", "3600"))
 PREDICTION_EVAL_INCLUDE_TODAY = os.getenv("PREDICTION_EVAL_INCLUDE_TODAY", "1").lower() in {"1", "true", "yes"}
 PREDICTION_EVAL_MIN_REFRESH_SECONDS = int(os.getenv("PREDICTION_EVAL_MIN_REFRESH_SECONDS", "600"))
@@ -398,6 +403,68 @@ def _slugify_filename(value: str) -> str:
             safe.append("_")
 
     return "_".join("".join(safe).split("_")) or "historico"
+
+
+def _history_cache_key(
+    site_id: str,
+    range_start: date,
+    range_end: date,
+    variable: str,
+    granularity: str,
+    file_format: str,
+) -> str:
+    return "|".join([
+        site_id,
+        range_start.isoformat(),
+        range_end.isoformat(),
+        variable,
+        granularity,
+        file_format,
+    ])
+
+
+def _history_cache_get(cache_key: str) -> Optional[dict[str, Any]]:
+    if HISTORY_CACHE_SECONDS <= 0:
+        return None
+
+    cached = history_download_cache.get(cache_key)
+    if not cached:
+        return None
+
+    age = datetime.now().timestamp() - float(cached.get("epoch") or 0)
+    if age > HISTORY_CACHE_SECONDS:
+        history_download_cache.pop(cache_key, None)
+        return None
+
+    return cached
+
+
+def _history_cache_set(
+    cache_key: str,
+    content: bytes,
+    media_type: str,
+    headers: dict[str, str],
+) -> None:
+    if HISTORY_CACHE_SECONDS <= 0:
+        return
+
+    if HISTORY_CACHE_MAX_BYTES > 0 and len(content) > HISTORY_CACHE_MAX_BYTES:
+        return
+
+    history_download_cache[cache_key] = {
+        "epoch": datetime.now().timestamp(),
+        "content": content,
+        "media_type": media_type,
+        "headers": dict(headers),
+    }
+
+    max_items = max(1, int(HISTORY_CACHE_MAX_ITEMS or 32))
+    while len(history_download_cache) > max_items:
+        oldest_key = min(
+            history_download_cache,
+            key=lambda key: float(history_download_cache[key].get("epoch") or 0),
+        )
+        history_download_cache.pop(oldest_key, None)
 
 
 def _build_history_dataframe(
@@ -681,6 +748,8 @@ async def refresh_prediction_actuals_for_site(site_id: str, force: bool = False)
             pending_dates,
         )
         updated = await asyncio.to_thread(prediction_store.update_actuals, site_id, actuals)
+        if updated:
+            ia_reliability_cache_by_site.pop(site_id, None)
     except Exception as e:
         logger.exception("PREDICTION EVAL ERROR site_id=%s error=%r", site_id, e)
 
@@ -745,6 +814,7 @@ ia_inflight: set[str] = set()
 ia_pending_by_site: set[str] = set()
 ia_epoch_by_site: Dict[str, float] = {}
 ia_reliability_cache_by_site: Dict[str, Dict[str, Any]] = {}
+history_download_cache: Dict[str, Dict[str, Any]] = {}
 daily_prediction_dates_run: set[str] = set()
 prediction_actual_refresh_epoch_by_site: Dict[str, float] = {}
 
@@ -818,6 +888,53 @@ def _init_caches():
 _init_caches()
 
 
+def _prediction_reliability_cache_get(site_id: str) -> Optional[dict[str, Any]]:
+    cached = ia_reliability_cache_by_site.get(site_id)
+    if not cached or RELIABILITY_CACHE_SECONDS <= 0:
+        return None
+
+    age = datetime.now().timestamp() - float(cached.get("epoch") or 0)
+    if age >= RELIABILITY_CACHE_SECONDS:
+        ia_reliability_cache_by_site.pop(site_id, None)
+        return None
+
+    payload = dict(cached.get("payload") or {})
+    payload["cache"] = "memory"
+    payload["cache_age_seconds"] = round(age)
+    return payload
+
+
+def _prediction_reliability_cache_set(site_id: str, payload: dict[str, Any]) -> None:
+    if RELIABILITY_CACHE_SECONDS <= 0:
+        return
+
+    ia_reliability_cache_by_site[site_id] = {
+        "epoch": datetime.now().timestamp(),
+        "payload": dict(payload),
+    }
+
+
+async def _prediction_reliability_payload(site_id: str, use_cache: bool = True) -> dict[str, Any]:
+    if use_cache:
+        cached = _prediction_reliability_cache_get(site_id)
+        if cached:
+            return cached
+
+    current_result = await asyncio.to_thread(prediction_store.evaluation, site_id, 30)
+    update_result = await refresh_prediction_actuals_for_site(
+        site_id,
+        force=not bool(current_result.get("points")),
+    )
+    result = await asyncio.to_thread(prediction_store.evaluation, site_id, 30)
+    result["generated_at"] = datetime.now().isoformat(timespec="seconds")
+    result["storage_backend"] = getattr(prediction_store, "storage_backend", "json")
+    result["update"] = update_result
+
+    payload = {"ok": True, "site_id": site_id, **result, "cache": "fresh"}
+    _prediction_reliability_cache_set(site_id, payload)
+    return payload
+
+
 # ---------------------------
 # HTTP routes
 # ---------------------------
@@ -843,17 +960,7 @@ async def api_prediction_reliability(site_id: str):
     if site_id not in SITES_BY_ID:
         raise HTTPException(status_code=404, detail="site_not_found")
 
-    current_result = await asyncio.to_thread(prediction_store.evaluation, site_id, 30)
-    update_result = await refresh_prediction_actuals_for_site(
-        site_id,
-        force=not bool(current_result.get("points")),
-    )
-    result = await asyncio.to_thread(prediction_store.evaluation, site_id, 30)
-    result["generated_at"] = datetime.now().isoformat(timespec="seconds")
-    result["storage_backend"] = getattr(prediction_store, "storage_backend", "json")
-    result["update"] = update_result
-
-    return {"ok": True, "site_id": site_id, **result}
+    return await _prediction_reliability_payload(site_id)
 
 
 @app.get("/api/history/download")
@@ -945,6 +1052,17 @@ async def api_history_download(
             status_code=400,
         )
 
+    cache_key = _history_cache_key(site_id, range_start, range_end, variable, granularity, file_format)
+    cached_download = _history_cache_get(cache_key)
+    if cached_download:
+        headers = dict(cached_download.get("headers") or {})
+        headers["X-History-Cache"] = "HIT"
+        return Response(
+            content=cached_download.get("content") or b"",
+            media_type=cached_download.get("media_type") or "application/octet-stream",
+            headers=headers,
+        )
+
     try:
         records = await asyncio.to_thread(fetch_saih_history, tags, range_start, range_end)
     except Exception as e:
@@ -1012,17 +1130,21 @@ async def api_history_download(
         media_type = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
         filename = f"{base_filename}.xlsx"
 
+    headers = {
+        "Content-Disposition": f'attachment; filename="{filename}"',
+        "X-History-Start-Date": range_start.isoformat(),
+        "X-History-End-Date": range_end.isoformat(),
+        "X-History-Granularity": granularity,
+        "X-History-Rows": str(len(df)),
+        "X-History-Cache": "MISS",
+        **({"X-History-Warning": history_warning} if history_warning else {}),
+    }
+    _history_cache_set(cache_key, content, media_type, headers)
+
     return Response(
         content=content,
         media_type=media_type,
-        headers={
-            "Content-Disposition": f'attachment; filename="{filename}"',
-            "X-History-Start-Date": range_start.isoformat(),
-            "X-History-End-Date": range_end.isoformat(),
-            "X-History-Granularity": granularity,
-            "X-History-Rows": str(len(df)),
-            **({"X-History-Warning": history_warning} if history_warning else {}),
-        },
+        headers=headers,
     )
 
 
@@ -2086,7 +2208,10 @@ async def poll_prediction_evaluation_loop():
     while True:
         try:
             for site in SITES:
-                await refresh_prediction_actuals_for_site(site["id"])
+                if PREDICTION_RELIABILITY_PRECACHE:
+                    await _prediction_reliability_payload(site["id"], use_cache=False)
+                else:
+                    await refresh_prediction_actuals_for_site(site["id"])
         except Exception as e:
             logger.exception("PREDICTION EVAL LOOP ERROR error=%r", e)
 
