@@ -629,6 +629,40 @@ def _saih_rate_limit_seconds_left() -> int:
     return max(0, seconds)
 
 
+def _quality_label(code: Optional[str]) -> str:
+    labels = {
+        "real": "real",
+        "persisted": "persistido",
+        "last_valid": "último válido",
+        "api_no_data": "API sin datos",
+    }
+    return labels.get(str(code or ""), "API sin datos")
+
+
+def _stored_quality(value: Any) -> str:
+    return "persisted" if value is not None else "api_no_data"
+
+
+def _preserved_quality(prev: dict[str, Any], value_key: str, quality_key: str) -> str:
+    if prev.get(value_key) is None:
+        return "api_no_data"
+
+    prev_quality = prev.get(quality_key)
+    if prev_quality == "persisted":
+        return "persisted"
+
+    return "last_valid"
+
+
+def _quality_payload(nivel_quality: str, caudal_quality: str) -> dict[str, str]:
+    return {
+        "nivel_quality": nivel_quality,
+        "nivel_quality_label": _quality_label(nivel_quality),
+        "caudal_quality": caudal_quality,
+        "caudal_quality_label": _quality_label(caudal_quality),
+    }
+
+
 def _set_saih_rate_limit(reason: str) -> None:
     global saih_rate_limit_until
 
@@ -644,6 +678,10 @@ def _set_saih_rate_limit(reason: str) -> None:
     for sid, prev in list(saih_cache_by_site.items()):
         saih_cache_by_site[sid] = {
             **prev,
+            **_quality_payload(
+                _preserved_quality(prev, "nivel_m", "nivel_quality"),
+                _preserved_quality(prev, "caudal_m3s", "caudal_quality"),
+            ),
             "saih_error": message,
             "saih_error_detail": reason,
         }
@@ -871,9 +909,13 @@ def _stored_saih(site_id: str) -> Dict[str, Any]:
             "caudal_m3s": None,
             "tendencia_nivel": None,
             "tendencia_caudal": None,
+            **_quality_payload("api_no_data", "api_no_data"),
             "saih_error": None,
             "saih_error_detail": None,
         }
+
+    nivel_quality = _stored_quality(actual.get("nivel_m"))
+    caudal_quality = _stored_quality(actual.get("caudal_m3s"))
 
     return {
         "ts": actual.get("observed_at"),
@@ -881,6 +923,7 @@ def _stored_saih(site_id: str) -> Dict[str, Any]:
         "caudal_m3s": actual.get("caudal_m3s"),
         "tendencia_nivel": None,
         "tendencia_caudal": None,
+        **_quality_payload(nivel_quality, caudal_quality),
         "saih_error": None,
         "saih_error_detail": None,
     }
@@ -1628,6 +1671,33 @@ def _ia_public_cache(site_id: str) -> Dict[str, Any]:
     return {**c, "pred_semana_pending": pending}
 
 
+def _prediction_interval_public_cache(site_id: str) -> dict[str, Any]:
+    cached = _prediction_reliability_cache_get(site_id)
+    metrics = (cached or {}).get("metrics") or {}
+
+    if not metrics:
+        try:
+            result = prediction_store.evaluation(site_id, PREDICTION_EVAL_LOOKBACK_DAYS)
+            metrics = result.get("metrics") or {}
+        except Exception as e:
+            logger.exception("PREDICTION INTERVAL LOAD ERROR site_id=%s error=%r", site_id, e)
+            metrics = {}
+
+    nivel_mae = _number_or_none(metrics.get("nivel_mae"))
+    caudal_mae = _number_or_none(metrics.get("caudal_mae"))
+    samples = int(metrics.get("samples") or 0) if isinstance(metrics, dict) else 0
+
+    return {
+        "prediction_interval": {
+            "method": "mae",
+            "nivel_mae": nivel_mae,
+            "caudal_mae": caudal_mae,
+            "samples": samples,
+            "available": bool(samples and (nivel_mae is not None or caudal_mae is not None)),
+        }
+    }
+
+
 def _build_payload(site_id: str, forced_is_new: Optional[bool] = None) -> Dict[str, Any]:
     site = SITES_BY_ID.get(site_id, {"id": site_id, "name": site_id})
 
@@ -1651,11 +1721,16 @@ def _build_payload(site_id: str, forced_is_new: Optional[bool] = None) -> Dict[s
         "caudal_m3s": sc.get("caudal_m3s"),
         "tendencia_nivel": sc.get("tendencia_nivel"),
         "tendencia_caudal": sc.get("tendencia_caudal"),
+        "nivel_quality": sc.get("nivel_quality") or "api_no_data",
+        "nivel_quality_label": sc.get("nivel_quality_label") or _quality_label(sc.get("nivel_quality")),
+        "caudal_quality": sc.get("caudal_quality") or "api_no_data",
+        "caudal_quality_label": sc.get("caudal_quality_label") or _quality_label(sc.get("caudal_quality")),
         "saih_error": sc.get("saih_error"),
         "saih_error_detail": sc.get("saih_error_detail"),
 
         **_aemet_public_cache(site_id),
         **_ia_public_cache(site_id),
+        **_prediction_interval_public_cache(site_id),
     }
     return payload
 
@@ -2019,12 +2094,24 @@ def _update_saih_cache_for_site(
         saih_error = None
         saih_error_detail = None
 
+    nivel_quality = (
+        "real"
+        if valid_nivel
+        else _preserved_quality(prev, "nivel_m", "nivel_quality")
+    )
+    caudal_quality = (
+        "real"
+        if valid_caudal
+        else _preserved_quality(prev, "caudal_m3s", "caudal_quality")
+    )
+
     cache_entry = {
         "ts": ts or prev.get("ts"),
         "nivel_m": (nivel.get("valor") if valid_nivel else prev.get("nivel_m")),
         "caudal_m3s": (caudal.get("valor") if valid_caudal else prev.get("caudal_m3s")),
         "tendencia_nivel": (nivel.get("tendencia") if valid_nivel else prev.get("tendencia_nivel")),
         "tendencia_caudal": (caudal.get("tendencia") if valid_caudal else prev.get("tendencia_caudal")),
+        **_quality_payload(nivel_quality, caudal_quality),
         "saih_error": saih_error,
         "saih_error_detail": saih_error_detail,
     }
@@ -2104,6 +2191,10 @@ async def refresh_saih_for_site(site_id: str) -> bool:
         prev = saih_cache_by_site.get(site_id, {})
         saih_cache_by_site[site_id] = {
             **prev,
+            **_quality_payload(
+                _preserved_quality(prev, "nivel_m", "nivel_quality"),
+                _preserved_quality(prev, "caudal_m3s", "caudal_quality"),
+            ),
             "saih_error": (
                 "SAIH Ebro ha limitado temporalmente las peticiones. No es un fallo de la web."
                 if _is_saih_rate_limit_error(e)
@@ -2166,6 +2257,10 @@ async def _refresh_saih_cache_once():
         for sid, prev in list(saih_cache_by_site.items()):
             saih_cache_by_site[sid] = {
                 **prev,
+                **_quality_payload(
+                    _preserved_quality(prev, "nivel_m", "nivel_quality"),
+                    _preserved_quality(prev, "caudal_m3s", "caudal_quality"),
+                ),
                 "saih_error": (
                     "SAIH Ebro ha limitado temporalmente las peticiones. No es un fallo de la web."
                     if _is_saih_rate_limit_error(e)

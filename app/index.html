@@ -351,12 +351,18 @@
             <!-- 🔥 MANTENER SPAN -->
             <div class="big"><span id="nivel">-</span></div>
             <div class="muted">Tendencia: <span id="tn" class="mono">-</span></div>
+            <div class="quality-line">
+              <span id="nivelQuality" class="quality-badge">API sin datos</span>
+            </div>
           </div>
 
           <div>
             <div class="label">Caudal (m³/s)</div>
             <div class="big"><span id="caudal">-</span></div>
             <div class="muted">Tendencia: <span id="tc" class="mono">-</span></div>
+            <div class="quality-line">
+              <span id="caudalQuality" class="quality-badge">API sin datos</span>
+            </div>
           </div>
         </div>
 
@@ -441,6 +447,7 @@
       <canvas id="predChart"></canvas>
       <div id="predChartLoading" class="chart-loading">Generando prediccion...</div>
     </div>
+    <div id="predIntervalInfo" class="chart-note"></div>
 
     <div class="row reliability-head" style="justify-content: space-between;">
       <h3 class="sectiontitle">Fiabilidad del modelo</h3>

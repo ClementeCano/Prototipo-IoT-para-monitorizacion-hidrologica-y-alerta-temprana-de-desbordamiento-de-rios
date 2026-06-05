@@ -268,6 +268,210 @@ function setConn(isUp) {
       });
     }
 
+    updatePredChart = function(pred, pending = false, interval = null) {
+      lastPredData = pred;
+      lastPredPending = pending;
+      lastPredInterval = interval;
+      const canvas = document.getElementById("predChart");
+      if (!canvas) return;
+
+      const limpia = limpiarPred(pred);
+
+      if (limpia.length === 0) {
+        if (predIntervalInfo) {
+          predIntervalInfo.classList.remove("active");
+          predIntervalInfo.textContent = "";
+        }
+        if (!predChart) {
+          if (pending) {
+            setChartLoading(predChartLoading, true, [
+              "Generando prediccion",
+              "Cargando modelo",
+              "Preparando grafica"
+            ]);
+          } else {
+            setChartMessage(predChartLoading, "Prediccion aun no disponible");
+          }
+        }
+        return;
+      }
+
+      setChartLoading(predChartLoading, false);
+      const labels = limpia.map((_, i) => `Dia ${i + 1}`);
+      const nivel = limpia.map(p => p[0]);
+      const caudal = limpia.map(p => p[1]);
+      const nivelMae = toNum(interval?.nivel_mae);
+      const caudalMae = toNum(interval?.caudal_mae);
+      const intervalSamples = Number(interval?.samples || 0);
+      const hasNivelBand = Number.isFinite(nivelMae) && nivelMae > 0;
+      const hasCaudalBand = Number.isFinite(caudalMae) && caudalMae > 0;
+
+      function clampArray(arr, min, max) {
+        return arr.map(v => {
+          if (v === null) return null;
+          return Math.max(min, Math.min(max, v));
+        });
+      }
+
+      const nivelClean = clampArray(nivel, 0, 10);
+      const caudalClean = clampArray(caudal, 0, 2000);
+      const nivelLower = hasNivelBand ? clampArray(nivel.map(v => v === null ? null : v - nivelMae), 0, 10) : [];
+      const nivelUpper = hasNivelBand ? clampArray(nivel.map(v => v === null ? null : v + nivelMae), 0, 10) : [];
+      const caudalLower = hasCaudalBand ? clampArray(caudal.map(v => v === null ? null : v - caudalMae), 0, 2000) : [];
+      const caudalUpper = hasCaudalBand ? clampArray(caudal.map(v => v === null ? null : v + caudalMae), 0, 2000) : [];
+      const finiteNivel = [...nivelClean, ...nivelUpper].filter(v => Number.isFinite(v));
+      const finiteCaudal = [...caudalClean, ...caudalUpper].filter(v => Number.isFinite(v));
+      const maxNivel = finiteNivel.length ? Math.max(...finiteNivel) : 1;
+      const maxCaudal = finiteCaudal.length ? Math.max(...finiteCaudal) : 1;
+
+      if (predIntervalInfo) {
+        predIntervalInfo.classList.add("active");
+        if (hasNivelBand || hasCaudalBand) {
+          const nivelTxt = hasNivelBand ? `nivel +/- ${fmt(nivelMae, 3)} m` : "nivel sin banda";
+          const caudalTxt = hasCaudalBand ? `caudal +/- ${fmt(caudalMae, 2)} m3/s` : "caudal sin banda";
+          predIntervalInfo.textContent = `Bandas de error historico (${intervalSamples || "-"} muestras): ${nivelTxt}; ${caudalTxt}.`;
+        } else {
+          predIntervalInfo.textContent = "Aun no hay suficientes puntos reales comparados para calcular bandas de error.";
+        }
+      }
+
+      if (predChart) predChart.destroy();
+
+      const chartTextColor = getChartTextColor();
+      const datasets = [];
+
+      if (hasNivelBand) {
+        datasets.push(
+          {
+            label: "Banda nivel inferior",
+            data: nivelLower,
+            borderWidth: 0,
+            pointRadius: 0,
+            borderColor: "rgba(34,197,94,0)",
+            backgroundColor: "rgba(34,197,94,.12)",
+            yAxisID: "yNivel",
+            isBand: true
+          },
+          {
+            label: "Banda nivel",
+            data: nivelUpper,
+            borderWidth: 0,
+            pointRadius: 0,
+            borderColor: "rgba(34,197,94,0)",
+            backgroundColor: "rgba(34,197,94,.12)",
+            fill: "-1",
+            yAxisID: "yNivel",
+            isBand: true
+          }
+        );
+      }
+
+      datasets.push({
+        label: "Nivel (m)",
+        data: nivelClean,
+        borderWidth: 3,
+        tension: 0.35,
+        pointRadius: 5,
+        borderColor: "#22c55e",
+        yAxisID: "yNivel"
+      });
+
+      if (hasCaudalBand) {
+        datasets.push(
+          {
+            label: "Banda caudal inferior",
+            data: caudalLower,
+            borderWidth: 0,
+            pointRadius: 0,
+            borderColor: "rgba(124,58,237,0)",
+            backgroundColor: "rgba(124,58,237,.10)",
+            yAxisID: "yCaudal",
+            isBand: true
+          },
+          {
+            label: "Banda caudal",
+            data: caudalUpper,
+            borderWidth: 0,
+            pointRadius: 0,
+            borderColor: "rgba(124,58,237,0)",
+            backgroundColor: "rgba(124,58,237,.10)",
+            fill: "-1",
+            yAxisID: "yCaudal",
+            isBand: true
+          }
+        );
+      }
+
+      datasets.push({
+        label: "Caudal (m3/s)",
+        data: caudalClean,
+        borderWidth: 2,
+        tension: 0.35,
+        borderDash: [6, 6],
+        borderColor: "#7c3aed",
+        yAxisID: "yCaudal"
+      });
+
+      predChart = new Chart(canvas, {
+        type: "line",
+        data: { labels, datasets },
+        options: {
+          responsive: true,
+          maintainAspectRatio: false,
+          plugins: {
+            legend: {
+              labels: {
+                color: chartTextColor,
+                filter: item => !datasets[item.datasetIndex]?.isBand
+              }
+            },
+            tooltip: {
+              mode: "index",
+              intersect: false,
+              filter: item => !item.dataset.isBand
+            }
+          },
+          interaction: {
+            mode: "index",
+            intersect: false
+          },
+          scales: {
+            yNivel: {
+              type: "linear",
+              position: "left",
+              min: 0,
+              max: Math.ceil(maxNivel + 0.5),
+              ticks: {
+                color: chartTextColor,
+                callback: v => v.toFixed(1)
+              },
+              title: {
+                display: true,
+                text: "Nivel (m)",
+                color: chartTextColor
+              }
+            },
+            yCaudal: {
+              type: "linear",
+              position: "right",
+              min: 0,
+              max: Math.ceil(maxCaudal * 1.2),
+              ticks: {
+                color: chartTextColor,
+                callback: v => Math.round(v)
+              },
+              grid: { drawOnChartArea: false },
+              title: {
+                display: true,
+                text: "Caudal (m3/s)",
+                color: chartTextColor
+              }
+            }
+          }
+        }
+      });
+    };
+
     function clearReliabilityChart(message = "") {
       setChartLoading(reliabilityChartLoading, false);
 

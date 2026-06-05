@@ -20,6 +20,8 @@ const connDot = document.getElementById("connDot");
     const caudalEl = document.getElementById("caudal");
     const tnEl = document.getElementById("tn");
     const tcEl = document.getElementById("tc");
+    const nivelQuality = document.getElementById("nivelQuality");
+    const caudalQuality = document.getElementById("caudalQuality");
 
     const estadoDot = document.getElementById("estadoDot");
     const estadoTxt = document.getElementById("estadoTxt");
@@ -59,6 +61,7 @@ const connDot = document.getElementById("connDot");
     let currentUser = null;
     let lastPredData = null;
     let lastPredPending = false;
+    let lastPredInterval = null;
     let emailConfig = null;
 
     const userPanel = document.getElementById("userPanel");
@@ -104,6 +107,7 @@ const connDot = document.getElementById("connDot");
     const reliabilityCaudalMae = document.getElementById("reliabilityCaudalMae");
     const predChartLoading = document.getElementById("predChartLoading");
     const reliabilityChartLoading = document.getElementById("reliabilityChartLoading");
+    const predIntervalInfo = document.getElementById("predIntervalInfo");
     let historyFilenameEdited = false;
     let serverHistoryDownloads = [];
     let historyDownloadsLoadedFor = null;
@@ -329,7 +333,7 @@ const connDot = document.getElementById("connDot");
       }
 
       if (lastPredData) {
-        updatePredChart(lastPredData, lastPredPending);
+        updatePredChart(lastPredData, lastPredPending, lastPredInterval);
       }
     }
 
@@ -442,6 +446,23 @@ let sitesGlobal = []; // 🔥 guardar sitios para mapa
 
     }
 
+    function setQualityBadge(element, code, label) {
+      if (!element) {
+        return;
+      }
+
+      const normalized = String(code || "api_no_data").trim() || "api_no_data";
+      const labels = {
+        real: "real",
+        persisted: "persistido",
+        last_valid: "último válido",
+        api_no_data: "API sin datos"
+      };
+
+      element.className = `quality-badge ${normalized}`;
+      element.textContent = label || labels[normalized] || "API sin datos";
+    }
+
     function startWS() {
       const protocol = (location.protocol === "https:") ? "wss" : "ws";
       ws = new WebSocket(`${protocol}://${location.host}/ws`);
@@ -478,6 +499,8 @@ let sitesGlobal = []; // 🔥 guardar sitios para mapa
 
         tnEl.textContent = formatTrend(data.tendencia_nivel);
         tcEl.textContent = formatTrend(data.tendencia_caudal);
+        setQualityBadge(nivelQuality, data.nivel_quality, data.nivel_quality_label);
+        setQualityBadge(caudalQuality, data.caudal_quality, data.caudal_quality_label);
 
         setEstadoRio(nivel);
 
@@ -519,7 +542,7 @@ let sitesGlobal = []; // 🔥 guardar sitios para mapa
         window._lastIaRef = data.ia_refreshed_at ?? "-";
         debugLog("IA PRED:", data.pred_semana);
         updateIAState(data.ia_error, data.pred_semana);
-        updatePredChart(data.pred_semana, data.pred_semana_pending === true);
+        updatePredChart(data.pred_semana, data.pred_semana_pending === true, data.prediction_interval);
 
         if (
           data.site_id &&
