@@ -92,7 +92,7 @@ try:
         extract_rain_forecast_mm,
         extract_prob_precip_summary,
     )
-    from app.prediccion_individual import predecir_semana_municipio
+    from app.prediccion_individual import predecir_semana_municipio_detallada
     from app.prediction_store import create_prediction_store
     from app.core.config import SITES, collect_all_tags
     from app import alertas
@@ -104,7 +104,7 @@ except ImportError:
         extract_rain_forecast_mm,
         extract_prob_precip_summary,
     )
-    from app.prediccion_individual import predecir_semana_municipio
+    from app.prediccion_individual import predecir_semana_municipio_detallada
     from app.prediction_store import create_prediction_store
     from app.core.config import SITES, collect_all_tags
     from app import alertas
@@ -275,6 +275,7 @@ HISTORY_CACHE_MAX_BYTES = int(os.getenv("HISTORY_CACHE_MAX_BYTES", str(10 * 1024
 PREDICTION_EVAL_LOOKBACK_DAYS = int(os.getenv("PREDICTION_EVAL_LOOKBACK_DAYS", "30"))
 RELIABILITY_CACHE_SECONDS = int(os.getenv("RELIABILITY_CACHE_SECONDS", "3600"))
 PREDICTION_RELIABILITY_PRECACHE = os.getenv("PREDICTION_RELIABILITY_PRECACHE", "1").lower() in {"1", "true", "yes"}
+PREDICTION_BACKFILL_FROM_FORECAST = os.getenv("PREDICTION_BACKFILL_FROM_FORECAST", "0").lower() in {"1", "true", "yes"}
 PREDICTION_EVAL_CHECK_SECONDS = int(os.getenv("PREDICTION_EVAL_CHECK_SECONDS", "3600"))
 PREDICTION_EVAL_INCLUDE_TODAY = os.getenv("PREDICTION_EVAL_INCLUDE_TODAY", "1").lower() in {"1", "true", "yes"}
 PREDICTION_EVAL_MIN_REFRESH_SECONDS = int(os.getenv("PREDICTION_EVAL_MIN_REFRESH_SECONDS", "600"))
@@ -655,6 +656,13 @@ def _set_saih_rate_limit(reason: str) -> None:
 
 
 async def ensure_prediction_point_from_latest_forecast(site_id: str) -> dict[str, Any]:
+    if not PREDICTION_BACKFILL_FROM_FORECAST:
+        return {
+            "checked": False,
+            "stored": 0,
+            "reason": "forecast_backfill_disabled",
+        }
+
     site = SITES_BY_ID.get(site_id)
     if not site:
         return {"checked": False, "stored": 0, "error": "site_not_found"}
@@ -1664,14 +1672,14 @@ async def _run_prediction(
         loop = asyncio.get_running_loop()
         return await loop.run_in_executor(
             IA_EXECUTOR,
-            predecir_semana_municipio,
+            predecir_semana_municipio_detallada,
             site_id,
             use_live_saih,
             allow_stale_fallback,
         )
 
     return await asyncio.to_thread(
-        predecir_semana_municipio,
+        predecir_semana_municipio_detallada,
         site_id,
         use_live_saih,
         allow_stale_fallback,
@@ -1706,11 +1714,21 @@ async def refresh_ia_for_site(
     logger.info("IA refresh iniciado site_id=%s", site_id)
 
     try:
-        pred = await _run_prediction(
+        prediction_result = await _run_prediction(
             site_id,
             use_live_saih=True if force else use_live_saih,
             allow_stale_fallback=False if force else allow_stale_fallback,
         )
+        if isinstance(prediction_result, dict):
+            pred = prediction_result.get("predictions") or []
+            prediction_source = prediction_result.get("source")
+            prediction_input_last_date = prediction_result.get("input_last_date")
+            prediction_stale = bool(prediction_result.get("stale"))
+        else:
+            pred = prediction_result or []
+            prediction_source = None
+            prediction_input_last_date = None
+            prediction_stale = False
 
         if pred is None:
             pred = []
@@ -1719,6 +1737,15 @@ async def refresh_ia_for_site(
         stored_forecast = 0
         site = SITES_BY_ID.get(site_id)
         should_store_evaluation = force if store_evaluation is None else bool(store_evaluation)
+
+        if should_store_evaluation and prediction_stale:
+            logger.warning(
+                "IA %s: no se guarda comparativa porque la ventana es antigua source=%s last_date=%s",
+                site_id,
+                prediction_source,
+                prediction_input_last_date,
+            )
+            should_store_evaluation = False
 
         if site and pred:
             try:
@@ -1743,7 +1770,9 @@ async def refresh_ia_for_site(
             "pred_semana": pred,
             "pred_semana_persistida": stored_predictions,
             "pred_semana_forecast_persistido": stored_forecast,
-            "pred_semana_source": "fresh",
+            "pred_semana_source": prediction_source or "fresh",
+            "pred_semana_input_last_date": prediction_input_last_date,
+            "pred_semana_stale": prediction_stale,
             "pred_semana_store_checked": True,
             "pred_semana_pending": False,
         }
@@ -1906,8 +1935,8 @@ async def ws(websocket: WebSocket):
                                     site_id,
                                     force=False,
                                     store_evaluation=False,
-                                    use_live_saih=False,
-                                    allow_stale_fallback=True,
+                                    use_live_saih=None,
+                                    allow_stale_fallback=False,
                                 )
                             finally:
                                 ia_pending_by_site.discard(site_id)

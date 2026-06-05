@@ -212,6 +212,36 @@ def _public_point(record: dict[str, Any]) -> dict[str, Any]:
     }
 
 
+def _prediction_value_key(point: dict[str, Any]) -> Optional[tuple[Optional[float], Optional[float]]]:
+    nivel = _float_or_none(point.get("nivel_pred"))
+    caudal = _float_or_none(point.get("caudal_pred"))
+
+    if nivel is None and caudal is None:
+        return None
+
+    return (
+        round(nivel, 9) if nivel is not None else None,
+        round(caudal, 9) if caudal is not None else None,
+    )
+
+
+def _drop_exact_duplicate_predictions(points: list[dict[str, Any]]) -> tuple[list[dict[str, Any]], int]:
+    seen: set[tuple[Optional[float], Optional[float]]] = set()
+    filtered = []
+    skipped = 0
+
+    for point in points:
+        key = _prediction_value_key(point)
+        if key is not None and key in seen:
+            skipped += 1
+            continue
+        if key is not None:
+            seen.add(key)
+        filtered.append(point)
+
+    return filtered, skipped
+
+
 def _forecast_points(predictions: list[dict[str, Any]]) -> list[dict[str, Any]]:
     points = []
 
@@ -716,12 +746,14 @@ class JsonPredictionStore:
         records.sort(key=lambda item: (item.get("targetDate", ""), item.get("issuedDate", ""), item.get("horizonDay", 0)))
         records = records[-max(1, min(int(limit or 30), 90)):]
         points = [_public_point(record) for record in records]
+        points, filtered_duplicates = _drop_exact_duplicate_predictions(points)
 
         return {
             "points": points,
             "metrics": _metrics(points),
             "pending": pending,
             "total": len(records),
+            "filtered_duplicate_predictions": filtered_duplicates,
             "mode": "persisted_predictions",
         }
 
@@ -1241,12 +1273,14 @@ class PostgresPredictionStore:
             }
             for row in rows
         ]
+        points, filtered_duplicates = _drop_exact_duplicate_predictions(points)
 
         return {
             "points": points,
             "metrics": _metrics(points),
             "pending": int(counts.get("pending") or 0),
             "total": int(counts.get("total") or 0),
+            "filtered_duplicate_predictions": filtered_duplicates,
             "mode": "persisted_predictions",
         }
 

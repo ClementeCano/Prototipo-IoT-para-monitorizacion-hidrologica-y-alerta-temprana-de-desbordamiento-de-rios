@@ -236,6 +236,9 @@ def _load_stored_daily_prediction_window(site_id: str) -> pd.DataFrame | None:
     if len(df) < VENTANA:
         return None
 
+    df.attrs["prediction_source"] = "stored_daily"
+    df.attrs["prediction_input_last_date"] = str(df["fecha"].iloc[-1])
+    df.attrs["prediction_stale"] = False
     logger.info("IA %s: usando medias diarias persistidas hasta %s", site_id, df["fecha"].iloc[-1])
     _STORED_DAILY_CACHE[site_id] = {"epoch": now, "df": df}
     return df.copy()
@@ -279,8 +282,12 @@ def _fallback_prediction_window(
             f"{reason}. Dataset local hasta {last_label}; no se usa como dato actual."
         )
 
+    df = base_df.copy()
+    df.attrs["prediction_source"] = "local_dataset"
+    df.attrs["prediction_input_last_date"] = last_date.isoformat() if last_date else None
+    df.attrs["prediction_stale"] = is_stale
     logger.warning("IA %s: usando dataset local como fallback (%s)", site_id, reason)
-    return base_df
+    return df
 
 
 def _load_live_prediction_window(
@@ -296,7 +303,12 @@ def _load_live_prediction_window(
     use_live = USE_LIVE_SAIH_WINDOW if use_live_saih is None else bool(use_live_saih)
 
     if not use_live:
-        return base_df
+        return _fallback_prediction_window(
+            site_id,
+            base_df,
+            "SAIH en directo desactivado para esta prediccion",
+            allow_stale_fallback,
+        )
 
     cached = _LIVE_WINDOW_CACHE.get(site_id)
     now = time.time()
@@ -372,6 +384,9 @@ def _load_live_prediction_window(
             allow_stale_fallback,
         )
 
+    combined.attrs["prediction_source"] = "saih_live"
+    combined.attrs["prediction_input_last_date"] = str(combined["fecha"].iloc[-1])
+    combined.attrs["prediction_stale"] = False
     logger.info("IA %s: usando ventana SAIH reciente hasta %s", site_id, combined["fecha"].iloc[-1])
     _LIVE_WINDOW_CACHE[site_id] = {"epoch": now, "df": combined}
     return combined.copy()
@@ -398,7 +413,7 @@ def _predict_from_window(artifacts, window_df: pd.DataFrame):
     return pred_nivel, pred_caudal
 
 
-def predecir_semana_municipio(
+def predecir_semana_municipio_detallada(
     site_id: str,
     use_live_saih: bool | None = None,
     allow_stale_fallback: bool | None = None,
@@ -407,12 +422,12 @@ def predecir_semana_municipio(
         artifacts = _load_prediction_artifacts(site_id)
 
         if artifacts is None:
-            return []
+            return {"predictions": [], "source": None, "input_last_date": None, "stale": None}
 
         df = _load_site_dataset(site_id)
 
         if df is None:
-            return []
+            return {"predictions": [], "source": None, "input_last_date": None, "stale": None}
 
         df = _add_model_features(df)
         df = _load_live_prediction_window(
@@ -424,20 +439,47 @@ def predecir_semana_municipio(
 
         if len(df) < VENTANA:
             logger.warning("Muy pocos datos en site_id=%s", site_id)
-            return []
+            return {
+                "predictions": [],
+                "source": df.attrs.get("prediction_source"),
+                "input_last_date": df.attrs.get("prediction_input_last_date"),
+                "stale": df.attrs.get("prediction_stale"),
+            }
 
         pred_nivel, pred_caudal = _predict_from_window(artifacts, df)
 
-        return [
-            {"nivel": float(n), "caudal": float(c)}
-            for n, c in zip(pred_nivel, pred_caudal)
-        ]
+        return {
+            "predictions": [
+                {"nivel": float(n), "caudal": float(c)}
+                for n, c in zip(pred_nivel, pred_caudal)
+            ],
+            "source": df.attrs.get("prediction_source"),
+            "input_last_date": df.attrs.get("prediction_input_last_date"),
+            "stale": bool(df.attrs.get("prediction_stale")),
+        }
 
     except RuntimeError:
         raise
     except Exception as e:
         logger.exception("Error IA en site_id=%s error=%s", site_id, e)
         raise RuntimeError(f"prediction_model_error: {e}") from e
+
+
+def predecir_semana_municipio(
+    site_id: str,
+    use_live_saih: bool | None = None,
+    allow_stale_fallback: bool | None = None,
+):
+    result = predecir_semana_municipio_detallada(
+        site_id,
+        use_live_saih=use_live_saih,
+        allow_stale_fallback=allow_stale_fallback,
+    )
+
+    if isinstance(result, dict):
+        return result.get("predictions") or []
+
+    return result or []
 
 
 def evaluar_fiabilidad_municipio(site_id: str):
