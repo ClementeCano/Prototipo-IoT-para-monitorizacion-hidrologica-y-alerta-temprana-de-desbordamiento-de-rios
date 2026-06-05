@@ -219,6 +219,7 @@
   .quality-badge{
     display:inline-flex;
     align-items:center;
+    position: relative;
     max-width:100%;
     border: 1px solid var(--stroke);
     border-radius: 999px;
@@ -228,6 +229,7 @@
     font-size: 11px;
     font-weight: 800;
     line-height: 1.2;
+    cursor: help;
   }
 
   .quality-badge::before{
@@ -243,6 +245,32 @@
   .quality-badge.persisted::before{ background: #38bdf8; }
   .quality-badge.last_valid::before{ background: #f59e0b; }
   .quality-badge.api_no_data::before{ background: #ef4444; }
+
+  .quality-badge[data-tooltip]:hover::after,
+  .quality-badge[data-tooltip]:focus-visible::after{
+    content: attr(data-tooltip);
+    position: absolute;
+    left: 0;
+    bottom: calc(100% + 8px);
+    z-index: 12;
+    width: min(260px, 82vw);
+    padding: 9px 10px;
+    border: 1px solid var(--stroke);
+    border-radius: 10px;
+    background: rgba(2, 17, 31, .96);
+    color: rgba(255,255,255,.92);
+    box-shadow: var(--shadow);
+    font-size: 12px;
+    font-weight: 700;
+    line-height: 1.35;
+    white-space: normal;
+  }
+
+  html[data-theme="light"] .quality-badge[data-tooltip]:hover::after,
+  html[data-theme="light"] .quality-badge[data-tooltip]:focus-visible::after{
+    background: rgba(255,255,255,.98);
+    color: rgba(15,23,42,.92);
+  }
 
   .dot{
     width: 10px; height: 10px;
@@ -428,6 +456,10 @@
     cursor:pointer;
     box-shadow: 0 10px 30px rgba(239,68,68,.4);
     transition: 0.2s;
+    text-decoration: none;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
   }
 
   .alert-btn.primary-action{
@@ -730,6 +762,73 @@
   .download-open:hover{
     border-color: rgba(6,182,212,.45);
     background: rgba(6,182,212,.14);
+  }
+
+  .site-footer{
+    margin: 18px auto 0;
+    color: var(--muted);
+    font-size: 13px;
+  }
+
+  .footer-inner{
+    display:flex;
+    gap: 12px;
+    justify-content: space-between;
+    align-items:center;
+    flex-wrap: wrap;
+    padding: 14px 2px 2px;
+  }
+
+  .site-footer a{
+    color: var(--a);
+    text-decoration: none;
+    font-weight: 800;
+  }
+
+  .site-footer a:hover{
+    text-decoration: underline;
+  }
+
+  .about-page{
+    display:grid;
+    gap: 16px;
+  }
+
+  .about-hero{
+    display:grid;
+    gap: 12px;
+  }
+
+  .about-grid{
+    display:grid;
+    gap: 16px;
+  }
+
+  @media (min-width: 860px){
+    .about-grid{
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+    }
+  }
+
+  .about-card{
+    gap: 8px;
+  }
+
+  .about-card p,
+  .about-card li{
+    color: var(--muted);
+    line-height: 1.55;
+  }
+
+  .about-card ul{
+    margin: 0;
+    padding-left: 18px;
+  }
+
+  .about-table td:first-child{
+    width: 34%;
+    color: var(--text);
+    font-weight: 800;
   }
 
   .history-preview{

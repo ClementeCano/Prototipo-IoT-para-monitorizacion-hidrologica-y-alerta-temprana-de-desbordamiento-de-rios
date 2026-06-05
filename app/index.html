@@ -44,6 +44,9 @@
       <button onclick="toggleHistoryPanel()" class="alert-btn secondary" id="historyBtn">
         Histórico
       </button>
+      <a href="/about" class="alert-btn secondary">
+        Acerca del sistema
+      </a>
       <button onclick="toggleAlerts()" class="alert-btn" id ="alertBtn">
         🔔 Activar alertas
       </button>
@@ -454,6 +457,10 @@
       <div class="row">
         <span class="pill">MAE nivel: <span id="reliabilityNivelMae" class="mono">-</span></span>
         <span class="pill">MAE caudal: <span id="reliabilityCaudalMae" class="mono">-</span></span>
+        <span class="pill">RMSE nivel: <span id="reliabilityNivelRmse" class="mono">-</span></span>
+        <span class="pill">RMSE caudal: <span id="reliabilityCaudalRmse" class="mono">-</span></span>
+        <span class="pill">Muestras: <span id="reliabilitySamples" class="mono">-</span></span>
+        <span class="pill">Última validación: <span id="reliabilityLastValidation" class="mono">-</span></span>
       </div>
     </div>
 
@@ -466,6 +473,13 @@
   </div>
 
 </div>
+
+<footer class="site-footer">
+  <div class="layout footer-inner">
+    <span>Dashboard Ebro · Sistema de monitorización hidrológica y alerta temprana</span>
+    <a href="/about">Acerca del sistema</a>
+  </div>
+</footer>
 
   
 

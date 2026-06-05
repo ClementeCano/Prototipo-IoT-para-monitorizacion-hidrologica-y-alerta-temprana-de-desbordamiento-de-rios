@@ -1,0 +1,106 @@
+<!doctype html>
+<html lang="es">
+<head>
+  <meta charset="utf-8"/>
+  <meta name="viewport" content="width=device-width, initial-scale=1"/>
+  <title>Acerca del sistema - Dashboard Ebro</title>
+  <meta name="theme-color" content="#05070d"/>
+  <script src="/static/js/theme-init.js"></script>
+  <link rel="stylesheet" href="/static/css/dashboard.css"/>
+</head>
+
+<body>
+  <div class="layout about-page">
+    <div class="row" style="justify-content: space-between; align-items:center;">
+      <div class="about-hero">
+        <h1>Acerca del sistema</h1>
+        <div class="muted">
+          Dashboard de monitorización hidrológica, predicción y alerta temprana para municipios del entorno del río Ebro.
+        </div>
+      </div>
+      <a href="/" class="alert-btn secondary">Volver al dashboard</a>
+    </div>
+
+    <div class="card about-card">
+      <h3 class="sectiontitle">Resumen funcional</h3>
+      <p>
+        El sistema integra datos hidrológicos de SAIH Ebro, previsión meteorológica de AEMET, persistencia en base de datos
+        y un modelo predictivo por municipio. El objetivo es ofrecer una vista operativa que permita consultar nivel,
+        caudal, lluvia, predicción a siete días, fiabilidad del modelo, descargas históricas y alertas personalizadas.
+      </p>
+    </div>
+
+    <div class="about-grid">
+      <div class="card about-card">
+        <h3 class="sectiontitle">Arquitectura</h3>
+        <ul>
+          <li>Frontend web servido por FastAPI con comunicación en tiempo real mediante WebSocket.</li>
+          <li>Backend modular para usuarios, preferencias, alertas, ingesta SAIH/AEMET, predicción y exportación de históricos.</li>
+          <li>Persistencia en PostgreSQL para usuarios, sesiones, dispositivos push, descargas, predicciones y medias reales.</li>
+          <li>Tareas de fondo para refrescar datos, agregar medias diarias y completar la comparativa de fiabilidad.</li>
+        </ul>
+      </div>
+
+      <div class="card about-card">
+        <h3 class="sectiontitle">Fuentes de datos</h3>
+        <table class="about-table">
+          <tbody>
+            <tr>
+              <td>SAIH Ebro</td>
+              <td>Nivel y caudal de estaciones hidrológicas. Se usa para el estado actual, las medias reales y la descarga histórica.</td>
+            </tr>
+            <tr>
+              <td>AEMET</td>
+              <td>Previsión de lluvia y probabilidad de precipitación para apoyar la interpretación del riesgo.</td>
+            </tr>
+            <tr>
+              <td>PostgreSQL</td>
+              <td>Datos persistidos de usuarios, sesiones, dispositivos, descargas, muestras horarias, medias diarias y predicciones.</td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+
+      <div class="card about-card">
+        <h3 class="sectiontitle">Modelo predictivo</h3>
+        <p>
+          Cada municipio dispone de un modelo entrenado con series históricas de nivel, caudal y variables derivadas.
+          La predicción se calcula sobre una ventana reciente de datos y genera valores estimados para los próximos siete días.
+        </p>
+        <p>
+          Para la comparativa de fiabilidad se guarda diariamente la predicción D+1 y se compara con la media real diaria
+          persistida cuando está disponible. Las bandas de error de la gráfica usan el MAE histórico como estimación visible
+          de incertidumbre.
+        </p>
+      </div>
+
+      <div class="card about-card">
+        <h3 class="sectiontitle">Calidad y limitaciones</h3>
+        <ul>
+          <li>Un dato marcado como real procede del último refresco correcto de SAIH.</li>
+          <li>Un dato persistido procede de la base de datos cuando no se acaba de consultar la API.</li>
+          <li>Un último válido conserva el último valor fiable si la API no devuelve dato nuevo.</li>
+          <li>Si SAIH limita peticiones o no publica una señal, se informa al usuario y se reintenta automáticamente.</li>
+          <li>Las predicciones dependen de la calidad y actualidad de los datos de entrada; no sustituyen a fuentes oficiales de emergencia.</li>
+        </ul>
+      </div>
+    </div>
+
+    <div class="card about-card">
+      <h3 class="sectiontitle">Métricas visibles</h3>
+      <p>
+        La pantalla principal muestra MAE, RMSE, número de muestras reales y fecha de última validación. Estas métricas se calculan
+        con predicciones D+1 guardadas y valores reales diarios persistidos, por lo que crecerán de forma progresiva a medida que
+        el sistema acumule días de uso.
+      </p>
+    </div>
+  </div>
+
+  <footer class="site-footer">
+    <div class="layout footer-inner">
+      <span>Dashboard Ebro · Sistema de monitorización hidrológica y alerta temprana</span>
+      <a href="/">Dashboard</a>
+    </div>
+  </footer>
+</body>
+</html>

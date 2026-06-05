@@ -105,6 +105,10 @@ const connDot = document.getElementById("connDot");
     const reliabilityErr = document.getElementById("reliabilityErr");
     const reliabilityNivelMae = document.getElementById("reliabilityNivelMae");
     const reliabilityCaudalMae = document.getElementById("reliabilityCaudalMae");
+    const reliabilityNivelRmse = document.getElementById("reliabilityNivelRmse");
+    const reliabilityCaudalRmse = document.getElementById("reliabilityCaudalRmse");
+    const reliabilitySamples = document.getElementById("reliabilitySamples");
+    const reliabilityLastValidation = document.getElementById("reliabilityLastValidation");
     const predChartLoading = document.getElementById("predChartLoading");
     const reliabilityChartLoading = document.getElementById("reliabilityChartLoading");
     const predIntervalInfo = document.getElementById("predIntervalInfo");
@@ -458,9 +462,19 @@ let sitesGlobal = []; // 🔥 guardar sitios para mapa
         last_valid: "último válido",
         api_no_data: "API sin datos"
       };
+      const descriptions = {
+        real: "Dato recibido en el último refresco desde SAIH Ebro.",
+        persisted: "Dato cargado desde la base de datos porque ya estaba guardado por el sistema.",
+        last_valid: "SAIH no ha devuelto un valor nuevo; se mantiene el último dato válido conocido.",
+        api_no_data: "SAIH no devuelve un valor disponible para este municipio o señal."
+      };
 
       element.className = `quality-badge ${normalized}`;
       element.textContent = label || labels[normalized] || "API sin datos";
+      element.title = descriptions[normalized] || descriptions.api_no_data;
+      element.setAttribute("aria-label", `${element.textContent}: ${element.title}`);
+      element.setAttribute("tabindex", "0");
+      element.dataset.tooltip = element.title;
     }
 
     function startWS() {

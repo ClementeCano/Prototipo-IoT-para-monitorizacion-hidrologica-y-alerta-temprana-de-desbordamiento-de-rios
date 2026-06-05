@@ -482,6 +482,10 @@ function setConn(isUp) {
 
       reliabilityNivelMae.textContent = "-";
       reliabilityCaudalMae.textContent = "-";
+      reliabilityNivelRmse.textContent = "-";
+      reliabilityCaudalRmse.textContent = "-";
+      reliabilitySamples.textContent = "-";
+      reliabilityLastValidation.textContent = "-";
       reliabilityErr.classList.remove("info");
 
       if (message) {
@@ -541,6 +545,10 @@ function setConn(isUp) {
       }
       reliabilityNivelMae.textContent = data.metrics?.nivel_mae ?? "-";
       reliabilityCaudalMae.textContent = data.metrics?.caudal_mae ?? "-";
+      reliabilityNivelRmse.textContent = data.metrics?.nivel_rmse ?? "-";
+      reliabilityCaudalRmse.textContent = data.metrics?.caudal_rmse ?? "-";
+      reliabilitySamples.textContent = data.metrics?.samples ?? "-";
+      reliabilityLastValidation.textContent = data.metrics?.last_validation_date ?? "-";
 
       const labels = points.map(point => {
         const day = point.target_date || point.date || "-";

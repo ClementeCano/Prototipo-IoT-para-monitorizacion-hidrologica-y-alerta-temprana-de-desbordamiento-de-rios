@@ -191,11 +191,27 @@ def _metrics(points: list[dict[str, Any]]) -> dict[str, Any]:
         for point in points
         if point.get("nivel_real") is not None or point.get("caudal_real") is not None
     )
+    validation_dates = [
+        str(point.get("target_date") or point.get("date") or "")
+        for point in points
+        if (
+            point.get("nivel_real") is not None
+            and point.get("nivel_pred") is not None
+        ) or (
+            point.get("caudal_real") is not None
+            and point.get("caudal_pred") is not None
+        )
+    ]
 
     return {
         "nivel_mae": round(sum(nivel_errors) / len(nivel_errors), 3) if nivel_errors else None,
         "caudal_mae": round(sum(caudal_errors) / len(caudal_errors), 3) if caudal_errors else None,
+        "nivel_rmse": round((sum(error * error for error in nivel_errors) / len(nivel_errors)) ** 0.5, 3) if nivel_errors else None,
+        "caudal_rmse": round((sum(error * error for error in caudal_errors) / len(caudal_errors)) ** 0.5, 3) if caudal_errors else None,
         "samples": samples,
+        "nivel_samples": len(nivel_errors),
+        "caudal_samples": len(caudal_errors),
+        "last_validation_date": max(validation_dates) if validation_dates else None,
     }
 
 

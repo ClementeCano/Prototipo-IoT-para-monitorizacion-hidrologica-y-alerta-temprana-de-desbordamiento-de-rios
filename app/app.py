@@ -993,6 +993,12 @@ async def _prediction_reliability_payload(site_id: str, use_cache: bool = True) 
 def home():
     return HTMLResponse((BASE_DIR / "index.html").read_text(encoding="utf-8"))
 
+
+@app.get("/about")
+def about():
+    return HTMLResponse((BASE_DIR / "about.html").read_text(encoding="utf-8"))
+
+
 @app.get("/api/sites")
 def api_sites():
     return JSONResponse([
@@ -1685,6 +1691,8 @@ def _prediction_interval_public_cache(site_id: str) -> dict[str, Any]:
 
     nivel_mae = _number_or_none(metrics.get("nivel_mae"))
     caudal_mae = _number_or_none(metrics.get("caudal_mae"))
+    nivel_rmse = _number_or_none(metrics.get("nivel_rmse"))
+    caudal_rmse = _number_or_none(metrics.get("caudal_rmse"))
     samples = int(metrics.get("samples") or 0) if isinstance(metrics, dict) else 0
 
     return {
@@ -1692,7 +1700,12 @@ def _prediction_interval_public_cache(site_id: str) -> dict[str, Any]:
             "method": "mae",
             "nivel_mae": nivel_mae,
             "caudal_mae": caudal_mae,
+            "nivel_rmse": nivel_rmse,
+            "caudal_rmse": caudal_rmse,
             "samples": samples,
+            "nivel_samples": int(metrics.get("nivel_samples") or 0) if isinstance(metrics, dict) else 0,
+            "caudal_samples": int(metrics.get("caudal_samples") or 0) if isinstance(metrics, dict) else 0,
+            "last_validation_date": metrics.get("last_validation_date") if isinstance(metrics, dict) else None,
             "available": bool(samples and (nivel_mae is not None or caudal_mae is not None)),
         }
     }
