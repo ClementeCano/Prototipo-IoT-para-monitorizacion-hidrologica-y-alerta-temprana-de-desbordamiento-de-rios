@@ -92,6 +92,29 @@ function setConn(isUp) {
         .filter(Boolean);
     }
 
+    function predChartLabels(pred, limpia) {
+      if (!Array.isArray(pred)) {
+        return limpia.map((_, i) => `Dia ${i + 1}`);
+      }
+
+      const labels = [];
+
+      pred.forEach((p) => {
+        if (!p || typeof p !== "object") return;
+
+        const nivel = toNum(p.nivel);
+        const caudal = toNum(p.caudal);
+
+        if (nivel === null && caudal === null) return;
+
+        labels.push(p.target_date || p.date || p.fecha || `Dia ${labels.length + 1}`);
+      });
+
+      return labels.length === limpia.length
+        ? labels
+        : limpia.map((_, i) => `Dia ${i + 1}`);
+    }
+
     function evaluarRiesgoIA(pred) {
       const limpia = limpiarPred(pred);
 
@@ -297,9 +320,11 @@ function setConn(isUp) {
       }
 
       setChartLoading(predChartLoading, false);
-      const labels = limpia.map((_, i) => `Dia ${i + 1}`);
+      const labels = predChartLabels(pred, limpia);
       const nivel = limpia.map(p => p[0]);
       const caudal = limpia.map(p => p[1]);
+      const hasPersistedD1Dates = Array.isArray(pred)
+        && pred.some(point => point && typeof point === "object" && (point.target_date || point.date || point.fecha));
       const nivelMae = toNum(interval?.nivel_mae);
       const caudalMae = toNum(interval?.caudal_mae);
       const intervalSamples = Number(interval?.samples || 0);
@@ -326,12 +351,15 @@ function setConn(isUp) {
 
       if (predIntervalInfo) {
         predIntervalInfo.classList.add("active");
+        const sourceText = hasPersistedD1Dates
+          ? "Mostrando ultimas predicciones D+1 guardadas porque no se ha podido regenerar una prediccion actual. "
+          : "";
         if (hasNivelBand || hasCaudalBand) {
           const nivelTxt = hasNivelBand ? `nivel +/- ${fmt(nivelMae, 3)} m` : "nivel sin banda";
           const caudalTxt = hasCaudalBand ? `caudal +/- ${fmt(caudalMae, 2)} m3/s` : "caudal sin banda";
-          predIntervalInfo.textContent = `Bandas de error historico (${intervalSamples || "-"} muestras): ${nivelTxt}; ${caudalTxt}.`;
+          predIntervalInfo.textContent = `${sourceText}Bandas de error historico (${intervalSamples || "-"} muestras): ${nivelTxt}; ${caudalTxt}.`;
         } else {
-          predIntervalInfo.textContent = "Aun no hay suficientes puntos reales comparados para calcular bandas de error.";
+          predIntervalInfo.textContent = `${sourceText}Aun no hay suficientes puntos reales comparados para calcular bandas de error.`;
         }
       }
 
@@ -713,8 +741,9 @@ function setConn(isUp) {
       return trends[normalized] || text || "-";
     }
 
-    function updateIAState(error, pred) {
+    function updateIAState(error, pred, warning = null, source = null) {
       iaRef.textContent = window._lastIaRef ?? "-";
+      iaErr.classList.remove("info");
 
       if (error) {
         setChartLoading(predChartLoading, false);
@@ -729,10 +758,18 @@ function setConn(isUp) {
 
       const limpia = limpiarPred(pred);
 
+      if (warning && limpia.length > 0) {
+        iaErr.classList.add("info");
+        iaErr.style.display = "block";
+        iaErr.textContent = `Mostrando prediccion guardada. ${formatIaError(warning)}`;
+      }
+
       if (limpia.length > 0) {
         const riesgo = evaluarRiesgoIA(limpia);
 
-        if (riesgo.clase === "bad") {
+        if (source === "persisted" || source === "persisted_d1") {
+          iaState.textContent = "Guardada";
+        } else if (riesgo.clase === "bad") {
           iaState.textContent = "Riesgo alto";
         } else if (riesgo.clase === "warn") {
           iaState.textContent = "Vigilancia";

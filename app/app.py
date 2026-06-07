@@ -868,9 +868,52 @@ def _default_ia(store_checked: bool = False) -> Dict[str, Any]:
     return {
         "ia_refreshed_at": None,
         "ia_error": None,
+        "ia_warning": None,
         "pred_semana": [],
         "pred_semana_source": None,
         "pred_semana_store_checked": store_checked,
+        "pred_semana_pending": False,
+    }
+
+
+def _stored_d1_predictions_ia(site_id: str, limit: int = 7) -> Optional[Dict[str, Any]]:
+    try:
+        result = prediction_store.evaluation(site_id, max(1, min(int(limit or 7), 14)))
+    except Exception as e:
+        logger.exception("PREDICTION D1 LOAD ERROR site_id=%s error=%r", site_id, e)
+        return None
+
+    points = result.get("points") or []
+    predictions: list[dict[str, Any]] = []
+
+    for point in points:
+        if not isinstance(point, dict):
+            continue
+
+        nivel = _number_or_none(point.get("nivel_pred"))
+        caudal = _number_or_none(point.get("caudal_pred"))
+
+        if nivel is None and caudal is None:
+            continue
+
+        predictions.append({
+            "nivel": nivel,
+            "caudal": caudal,
+            "target_date": point.get("target_date") or point.get("date"),
+            "issued_date": point.get("issued_date"),
+        })
+
+    if not predictions:
+        return None
+
+    latest = predictions[-1]
+    return {
+        "ia_refreshed_at": latest.get("issued_date") or latest.get("target_date"),
+        "ia_error": None,
+        "ia_warning": None,
+        "pred_semana": predictions,
+        "pred_semana_source": "persisted_d1",
+        "pred_semana_store_checked": True,
         "pred_semana_pending": False,
     }
 
@@ -880,19 +923,24 @@ def _stored_ia(site_id: str) -> Dict[str, Any]:
         forecast = prediction_store.latest_forecast(site_id)
     except Exception as e:
         logger.exception("PREDICTION FORECAST LOAD ERROR site_id=%s error=%r", site_id, e)
-        return _default_ia(store_checked=True)
+        forecast = None
 
-    if not forecast:
-        return _default_ia(store_checked=True)
+    if forecast and (forecast.get("predictions") or []):
+        return {
+            "ia_refreshed_at": forecast.get("issued_at"),
+            "ia_error": None,
+            "ia_warning": None,
+            "pred_semana": forecast.get("predictions") or [],
+            "pred_semana_source": "persisted",
+            "pred_semana_store_checked": True,
+            "pred_semana_pending": False,
+        }
 
-    return {
-        "ia_refreshed_at": forecast.get("issued_at"),
-        "ia_error": None,
-        "pred_semana": forecast.get("predictions") or [],
-        "pred_semana_source": "persisted",
-        "pred_semana_store_checked": True,
-        "pred_semana_pending": False,
-    }
+    d1_fallback = _stored_d1_predictions_ia(site_id)
+    if d1_fallback:
+        return d1_fallback
+
+    return _default_ia(store_checked=True)
 
 
 def _stored_saih(site_id: str) -> Dict[str, Any]:
@@ -1666,7 +1714,7 @@ def _ia_public_cache(site_id: str) -> Dict[str, Any]:
         ia_cache_by_site[site_id] = stored
         return {**stored, "pred_semana_pending": pending}
 
-    if not c.get("pred_semana") and not c.get("pred_semana_store_checked"):
+    if not c.get("pred_semana") and (not c.get("pred_semana_store_checked") or c.get("ia_error")):
         stored = _stored_ia(site_id)
         if stored.get("pred_semana"):
             ia_cache_by_site[site_id] = stored
@@ -1855,6 +1903,7 @@ async def refresh_ia_for_site(
         ia_cache_by_site[site_id] = {
             "ia_refreshed_at": datetime.now().isoformat(timespec="seconds"),
             "ia_error": None,
+            "ia_warning": None,
             "pred_semana": pred,
             "pred_semana_persistida": stored_predictions,
             "pred_semana_forecast_persistido": stored_forecast,
@@ -1869,9 +1918,27 @@ async def refresh_ia_for_site(
         return True
 
     except Exception as e:
+        stored = _stored_ia(site_id)
+        if stored.get("pred_semana"):
+            ia_cache_by_site[site_id] = {
+                **stored,
+                "ia_warning": repr(e),
+                "ia_error": None,
+                "pred_semana_pending": False,
+            }
+            ia_epoch_by_site[site_id] = now_epoch
+            logger.warning(
+                "IA live fallo site_id=%s; se muestra prediccion persistida source=%s error=%r",
+                site_id,
+                stored.get("pred_semana_source"),
+                e,
+            )
+            return False
+
         ia_cache_by_site[site_id] = {
             "ia_refreshed_at": datetime.now().isoformat(timespec="seconds"),
             "ia_error": repr(e),
+            "ia_warning": None,
             "pred_semana": [],
             "pred_semana_source": None,
             "pred_semana_store_checked": True,

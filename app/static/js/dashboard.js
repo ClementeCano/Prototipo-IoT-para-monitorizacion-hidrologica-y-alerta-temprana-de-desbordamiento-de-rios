@@ -555,7 +555,7 @@ let sitesGlobal = []; // 🔥 guardar sitios para mapa
 
         window._lastIaRef = data.ia_refreshed_at ?? "-";
         debugLog("IA PRED:", data.pred_semana);
-        updateIAState(data.ia_error, data.pred_semana);
+        updateIAState(data.ia_error, data.pred_semana, data.ia_warning, data.pred_semana_source);
         updatePredChart(data.pred_semana, data.pred_semana_pending === true, data.prediction_interval);
 
         if (
