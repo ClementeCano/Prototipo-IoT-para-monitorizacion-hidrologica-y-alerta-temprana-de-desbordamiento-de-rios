@@ -12,6 +12,11 @@ import requests
 from requests.adapters import HTTPAdapter
 from urllib3.util.retry import Retry
 
+try:
+    from app.env_utils import env_float, env_value
+except ImportError:
+    from env_utils import env_float, env_value
+
 # Opcional: en algunos Windows evita problemas de certificados
 try:
     import truststore  # type: ignore
@@ -21,7 +26,7 @@ except Exception:
 
 BASE = "https://opendata.aemet.es/opendata/api"
 TZ = ZoneInfo("Europe/Madrid")
-MIN_SECONDS_BETWEEN_REQUESTS = float(os.getenv("AEMET_MIN_SECONDS_BETWEEN_REQUESTS", "2"))
+MIN_SECONDS_BETWEEN_REQUESTS = env_float("AEMET_MIN_SECONDS_BETWEEN_REQUESTS", 2)
 _REQUEST_LOCK = Lock()
 _LAST_REQUEST_AT = 0.0
 
@@ -111,7 +116,7 @@ def _get_json(url: str, timeout: int = 60, pause_before_retry: float = 1.0):
 
 
 def fetch_aemet_municipio_horaria(municipio: str) -> List[Dict[str, Any]]:
-    api_key = os.getenv("AEMET_APIKEY", "")
+    api_key = env_value("AEMET_APIKEY", "")
     if not api_key:
         raise RuntimeError("Falta AEMET_APIKEY (en .env o variable de entorno).")
 

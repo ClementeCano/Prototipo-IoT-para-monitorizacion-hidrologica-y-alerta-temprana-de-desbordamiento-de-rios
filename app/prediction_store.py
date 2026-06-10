@@ -16,10 +16,15 @@ except ImportError:  # pragma: no cover - only used when Postgres extras are not
     Json = None
     RealDictCursor = None
 
+try:
+    from app.env_utils import env_int, env_value
+except ImportError:
+    from env_utils import env_int, env_value
+
 
 BASE_DIR = Path(__file__).resolve().parent
-DATA_DIR = Path(os.getenv("DATA_DIR", BASE_DIR)).resolve()
-PREDICTIONS_FILE = Path(os.getenv("PREDICTIONS_FILE", DATA_DIR / "predictions.json")).resolve()
+DATA_DIR = Path(env_value("DATA_DIR", str(BASE_DIR))).resolve()
+PREDICTIONS_FILE = Path(env_value("PREDICTIONS_FILE", str(DATA_DIR / "predictions.json"))).resolve()
 
 
 class PredictionStoreError(ValueError):
@@ -36,7 +41,7 @@ def _iso_now() -> str:
 
 def _today() -> date:
     try:
-        return datetime.now(ZoneInfo(os.getenv("ALERT_TIMEZONE", "Europe/Madrid"))).date()
+        return datetime.now(ZoneInfo(env_value("ALERT_TIMEZONE", "Europe/Madrid"))).date()
     except Exception:
         return date.today()
 
@@ -52,11 +57,23 @@ def _date_from_issued_at(value: Optional[str]) -> date:
 
     if parsed.tzinfo is not None:
         try:
-            parsed = parsed.astimezone(ZoneInfo(os.getenv("ALERT_TIMEZONE", "Europe/Madrid")))
+            parsed = parsed.astimezone(ZoneInfo(env_value("ALERT_TIMEZONE", "Europe/Madrid")))
         except Exception:
             parsed = parsed.replace(tzinfo=None)
 
     return parsed.date()
+
+
+def _parse_prediction_point_date(point: dict[str, Any]) -> Optional[date]:
+    for key in ("target_date", "date", "fecha"):
+        value = (point or {}).get(key)
+        if not value:
+            continue
+        try:
+            return date.fromisoformat(str(value)[:10])
+        except ValueError:
+            continue
+    return None
 
 
 def _parse_datetime(value: Any) -> Optional[datetime]:
@@ -72,7 +89,7 @@ def _parse_datetime(value: Any) -> Optional[datetime]:
         return None
 
     if parsed.tzinfo is not None:
-        parsed = parsed.astimezone(ZoneInfo(os.getenv("ALERT_TIMEZONE", "Europe/Madrid"))).replace(tzinfo=None)
+        parsed = parsed.astimezone(ZoneInfo(env_value("ALERT_TIMEZONE", "Europe/Madrid"))).replace(tzinfo=None)
 
     return parsed.replace(microsecond=0)
 
@@ -108,13 +125,13 @@ def _safe_database_label(database_url: str) -> str:
 
 
 def _database_url_from_parts() -> Optional[str]:
-    name = os.getenv("DB_NAME")
-    user = os.getenv("DB_USER")
-    password = os.getenv("DB_PASSWORD")
-    host = os.getenv("DB_HOST")
-    port = os.getenv("DB_PORT", "5432")
+    name = env_value("DB_NAME")
+    user = env_value("DB_USER")
+    password = env_value("DB_PASSWORD")
+    host = env_value("DB_HOST")
+    port = env_value("DB_PORT", "5432")
     default_sslmode = "require" if host and "neon.tech" in host else ""
-    sslmode = os.getenv("DB_SSLMODE", default_sslmode).strip()
+    sslmode = env_value("DB_SSLMODE", default_sslmode).strip()
 
     if not all([name, user, password, host]):
         return None
@@ -137,6 +154,7 @@ def _prediction_rows(site: dict[str, Any], predictions: list[dict[str, Any]], is
 
     now = issued_at or _iso_now()
     issued_date = _date_from_issued_at(now)
+    desired_target_date = issued_date + timedelta(days=1)
     rows = []
 
     for point in predictions or []:
@@ -149,7 +167,11 @@ def _prediction_rows(site: dict[str, Any], predictions: list[dict[str, Any]], is
         if nivel_pred is None and caudal_pred is None:
             continue
 
-        target_date = issued_date + timedelta(days=1)
+        point_target = _parse_prediction_point_date(point)
+        if point_target is None or point_target != desired_target_date:
+            continue
+
+        target_date = point_target
         row_id = f"{site_id}:{issued_date.isoformat()}:{target_date.isoformat()}"
 
         rows.append({
@@ -168,6 +190,10 @@ def _prediction_rows(site: dict[str, Any], predictions: list[dict[str, Any]], is
             "evaluatedAt": None,
             "updatedAt": now,
             "source": "model",
+            "metadata": {
+                "targetDateSource": "prediction_point_date",
+                "predictionPointTargetDate": target_date.isoformat(),
+            },
         })
         break
 
@@ -225,7 +251,13 @@ def _public_point(record: dict[str, Any]) -> dict[str, Any]:
         "nivel_pred": record.get("nivelPred"),
         "caudal_real": record.get("caudalReal"),
         "caudal_pred": record.get("caudalPred"),
+        "metadata": record.get("metadata") or {},
     }
+
+
+def _is_trusted_prediction_point(point: dict[str, Any]) -> bool:
+    metadata = point.get("metadata") or {}
+    return metadata.get("targetDateSource") == "prediction_point_date"
 
 
 def _prediction_value_key(point: dict[str, Any]) -> Optional[tuple[Optional[float], Optional[float]]]:
@@ -271,10 +303,15 @@ def _forecast_points(predictions: list[dict[str, Any]]) -> list[dict[str, Any]]:
         if nivel is None and caudal is None:
             continue
 
-        points.append({
+        forecast_point = {
             "nivel": nivel,
             "caudal": caudal,
-        })
+        }
+        target_date = _parse_prediction_point_date(point)
+        if target_date is not None:
+            forecast_point["target_date"] = target_date.isoformat()
+            forecast_point["date"] = target_date.isoformat()
+        points.append(forecast_point)
 
     return points
 
@@ -363,6 +400,51 @@ def _daily_record_from_samples(site_id: str, site_name: str, actual_date: date, 
         "sampleCount": max(len(nivel_values), len(caudal_values)),
         "updatedAt": now,
     }
+
+
+def _daily_record_from_actual(site: dict[str, Any], actual_date: date, actual: dict[str, Any]) -> Optional[dict[str, Any]]:
+    site_id = str((site or {}).get("id") or "").strip()
+    if not site_id:
+        return None
+
+    nivel = _float_or_none((actual or {}).get("nivel_m"))
+    caudal = _float_or_none((actual or {}).get("caudal_m3s"))
+    if nivel is None and caudal is None:
+        return None
+
+    try:
+        sample_count = int((actual or {}).get("sample_count") or 0)
+    except (TypeError, ValueError):
+        sample_count = 0
+
+    now = _iso_now()
+    return {
+        "siteId": site_id,
+        "site": str((site or {}).get("name") or site_id),
+        "actualDate": actual_date.isoformat(),
+        "nivelM": round(nivel, 3) if nivel is not None else None,
+        "caudalM3s": round(caudal, 3) if caudal is not None else None,
+        "sampleCount": max(0, sample_count),
+        "updatedAt": now,
+    }
+
+
+def _point_has_real_value(point: dict[str, Any]) -> bool:
+    return (
+        point.get("nivel_real") is not None
+        and point.get("nivel_pred") is not None
+    ) or (
+        point.get("caudal_real") is not None
+        and point.get("caudal_pred") is not None
+    )
+
+
+def _point_pending_real_value(point: dict[str, Any]) -> bool:
+    return (
+        point.get("nivel_pred") is not None and point.get("nivel_real") is None
+    ) or (
+        point.get("caudal_pred") is not None and point.get("caudal_real") is None
+    )
 
 
 def _public_latest_actual(record: Optional[dict[str, Any]]) -> Optional[dict[str, Any]]:
@@ -615,6 +697,44 @@ class JsonPredictionStore:
 
         return updated
 
+    def store_daily_actuals(self, site: dict[str, Any], actuals_by_date: dict[str, dict[str, Any]]) -> int:
+        if not actuals_by_date:
+            return 0
+
+        records = []
+        for day, actual in actuals_by_date.items():
+            try:
+                actual_date = date.fromisoformat(str(day))
+            except ValueError:
+                continue
+
+            record = _daily_record_from_actual(site, actual_date, actual)
+            if record:
+                records.append(record)
+
+        if not records:
+            return 0
+
+        with self.lock:
+            data = self._load_unlocked()
+            existing = {
+                (item.get("siteId"), item.get("actualDate")): item
+                for item in data.get("dailyActuals", [])
+                if isinstance(item, dict) and item.get("siteId") and item.get("actualDate")
+            }
+
+            for record in records:
+                existing[(record["siteId"], record["actualDate"])] = record
+
+            data["dailyActuals"] = sorted(
+                existing.values(),
+                key=lambda item: (item.get("siteId", ""), item.get("actualDate", "")),
+                reverse=True,
+            )[:5000]
+            self._save_unlocked(data)
+
+        return len(records)
+
     def daily_actuals_by_date(self, site_id: str, dates: list[date]) -> dict[str, dict[str, Any]]:
         wanted = {day.isoformat() for day in dates}
         if not wanted:
@@ -762,14 +882,18 @@ class JsonPredictionStore:
         records.sort(key=lambda item: (item.get("targetDate", ""), item.get("issuedDate", ""), item.get("horizonDay", 0)))
         records = records[-max(1, min(int(limit or 30), 90)):]
         points = [_public_point(record) for record in records]
-        points, filtered_duplicates = _drop_exact_duplicate_predictions(points)
+        trusted_points = [point for point in points if _is_trusted_prediction_point(point)]
+        comparable_points = [point for point in trusted_points if _point_has_real_value(point)]
+        pending = sum(1 for point in trusted_points if _point_pending_real_value(point))
 
         return {
-            "points": points,
-            "metrics": _metrics(points),
+            "points": comparable_points,
+            "metrics": _metrics(comparable_points),
             "pending": pending,
-            "total": len(records),
-            "filtered_duplicate_predictions": filtered_duplicates,
+            "total": len(trusted_points),
+            "stored_points": len(points),
+            "legacy_points": len(points) - len(trusted_points),
+            "filtered_duplicate_predictions": 0,
             "mode": "persisted_predictions",
         }
 
@@ -783,8 +907,8 @@ class PostgresPredictionStore:
 
         self.database_url = database_url
         self.path = _safe_database_label(database_url)
-        minconn = int(os.getenv("POSTGRES_POOL_MIN", str(minconn)))
-        maxconn = int(os.getenv("POSTGRES_POOL_MAX", str(maxconn)))
+        minconn = env_int("POSTGRES_POOL_MIN", minconn)
+        maxconn = env_int("POSTGRES_POOL_MAX", maxconn)
         self.pool = pool.ThreadedConnectionPool(minconn, maxconn, dsn=database_url)
         self._ensure_schema()
 
@@ -905,7 +1029,7 @@ class PostgresPredictionStore:
                             row["caudalPred"],
                             row["updatedAt"],
                             row["source"],
-                            Json({}),
+                            Json(row.get("metadata") or {}),
                         ),
                     )
 
@@ -1106,6 +1230,53 @@ class PostgresPredictionStore:
 
         return updated
 
+    def store_daily_actuals(self, site: dict[str, Any], actuals_by_date: dict[str, dict[str, Any]]) -> int:
+        if not actuals_by_date:
+            return 0
+
+        records = []
+        for day, actual in actuals_by_date.items():
+            try:
+                actual_date = date.fromisoformat(str(day))
+            except ValueError:
+                continue
+
+            record = _daily_record_from_actual(site, actual_date, actual)
+            if record:
+                records.append(record)
+
+        if not records:
+            return 0
+
+        with self._connection() as conn:
+            with conn.cursor() as cur:
+                for record in records:
+                    cur.execute(
+                        """
+                        INSERT INTO hydrology_daily_actuals (
+                            site_id, site_name, actual_date, nivel_m, caudal_m3s, sample_count, updated_at
+                        )
+                        VALUES (%s, %s, %s, %s, %s, %s, %s)
+                        ON CONFLICT (site_id, actual_date) DO UPDATE SET
+                            site_name = EXCLUDED.site_name,
+                            nivel_m = EXCLUDED.nivel_m,
+                            caudal_m3s = EXCLUDED.caudal_m3s,
+                            sample_count = GREATEST(hydrology_daily_actuals.sample_count, EXCLUDED.sample_count),
+                            updated_at = EXCLUDED.updated_at
+                        """,
+                        (
+                            record["siteId"],
+                            record["site"],
+                            record["actualDate"],
+                            record["nivelM"],
+                            record["caudalM3s"],
+                            record["sampleCount"],
+                            record["updatedAt"],
+                        ),
+                    )
+
+        return len(records)
+
     def daily_actuals_by_date(self, site_id: str, dates: list[date]) -> dict[str, dict[str, Any]]:
         if not dates:
             return {}
@@ -1264,7 +1435,7 @@ class PostgresPredictionStore:
                 cur.execute(
                     """
                     SELECT site_id, site_name, issued_date, issued_at, target_date, horizon_day,
-                           nivel_pred, caudal_pred, nivel_real, caudal_real
+                           nivel_pred, caudal_pred, nivel_real, caudal_real, metadata
                     FROM prediction_points
                     WHERE site_id = %s
                       AND horizon_day = 1
@@ -1286,27 +1457,32 @@ class PostgresPredictionStore:
                 "nivel_pred": row["nivel_pred"],
                 "caudal_real": row["caudal_real"],
                 "caudal_pred": row["caudal_pred"],
+                "metadata": row["metadata"] or {},
             }
             for row in rows
         ]
-        points, filtered_duplicates = _drop_exact_duplicate_predictions(points)
+        trusted_points = [point for point in points if _is_trusted_prediction_point(point)]
+        comparable_points = [point for point in trusted_points if _point_has_real_value(point)]
+        pending = sum(1 for point in trusted_points if _point_pending_real_value(point))
 
         return {
-            "points": points,
-            "metrics": _metrics(points),
-            "pending": int(counts.get("pending") or 0),
-            "total": int(counts.get("total") or 0),
-            "filtered_duplicate_predictions": filtered_duplicates,
+            "points": comparable_points,
+            "metrics": _metrics(comparable_points),
+            "pending": pending,
+            "total": len(trusted_points),
+            "stored_points": len(points),
+            "legacy_points": len(points) - len(trusted_points),
+            "filtered_duplicate_predictions": 0,
             "mode": "persisted_predictions",
         }
 
 
 def create_prediction_store():
-    backend = os.getenv("PREDICTION_STORE_BACKEND", os.getenv("USER_STORE_BACKEND", "auto")).strip().lower()
+    backend = env_value("PREDICTION_STORE_BACKEND", env_value("USER_STORE_BACKEND", "auto")).strip().lower()
     database_url = (
-        os.getenv("DATABASE_URL")
-        or os.getenv("POSTGRES_URL")
-        or os.getenv("POSTGRES_DATABASE_URL")
+        env_value("DATABASE_URL")
+        or env_value("POSTGRES_URL")
+        or env_value("POSTGRES_DATABASE_URL")
         or _database_url_from_parts()
     )
 

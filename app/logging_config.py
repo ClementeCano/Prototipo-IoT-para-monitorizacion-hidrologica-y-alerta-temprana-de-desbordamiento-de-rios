@@ -5,6 +5,11 @@ import re
 from datetime import datetime, timezone
 from typing import Any
 
+try:
+    from app.env_utils import env_value
+except ImportError:
+    from env_utils import env_value
+
 
 SECRET_PATTERNS = [
     re.compile(r"(?i)(api[_-]?key|apikey|password|passwd|token|secret|credential|authorization)(=|:)\s*([^&\s,;}]+)"),
@@ -69,7 +74,7 @@ def configure_logging() -> None:
     if getattr(root, "_dashboard_ebro_configured", False):
         return
 
-    level_name = os.getenv("LOG_LEVEL", "INFO").strip().upper()
+    level_name = env_value("LOG_LEVEL", "INFO").strip().upper()
     level = getattr(logging, level_name, logging.INFO)
 
     handler = logging.StreamHandler()

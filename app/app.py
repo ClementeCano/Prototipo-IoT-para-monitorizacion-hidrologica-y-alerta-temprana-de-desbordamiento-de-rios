@@ -20,6 +20,11 @@ except ImportError:
 configure_logging()
 logger = logging.getLogger(__name__)
 
+try:
+    from app.env_utils import env_bool, env_float, env_int, env_value
+except ImportError:
+    from env_utils import env_bool, env_float, env_int, env_value
+
 for stream in (sys.stdout, sys.stderr):
     try:
         stream.reconfigure(encoding="utf-8")
@@ -31,9 +36,9 @@ from firebase_admin import credentials, messaging
 
 
 try:
-    firebase_path = os.getenv("FIREBASE_CREDENTIALS")
-    firebase_json = os.getenv("FIREBASE_CREDENTIALS_JSON")
-    firebase_json_base64 = os.getenv("FIREBASE_CREDENTIALS_JSON_BASE64")
+    firebase_path = env_value("FIREBASE_CREDENTIALS")
+    firebase_json = env_value("FIREBASE_CREDENTIALS_JSON")
+    firebase_json_base64 = env_value("FIREBASE_CREDENTIALS_JSON_BASE64")
 
     logger.info("Firebase credentials source configured: %s", bool(firebase_path or firebase_json or firebase_json_base64))
 
@@ -119,10 +124,10 @@ from collections import defaultdict
 # 🔥 usar ruta absoluta estable
 BASE_DIR = Path(__file__).resolve().parent
 STATIC_DIR = BASE_DIR / "static"
-DATA_DIR = Path(os.getenv("DATA_DIR", BASE_DIR)).resolve()
+DATA_DIR = Path(env_value("DATA_DIR", str(BASE_DIR))).resolve()
 DATA_DIR.mkdir(parents=True, exist_ok=True)
 
-TOKENS_FILE = Path(os.getenv("TOKENS_FILE", DATA_DIR / "tokens.json")).resolve()
+TOKENS_FILE = Path(env_value("TOKENS_FILE", str(DATA_DIR / "tokens.json"))).resolve()
 TOKENS_FILE.parent.mkdir(parents=True, exist_ok=True)
 logger.info("DATA_DIR: %s", DATA_DIR)
 logger.info("TOKENS_FILE: %s", TOKENS_FILE)
@@ -245,46 +250,48 @@ def limpiar_tokens_invalidos(invalid_tokens):
 # Config
 # ---------------------------
 # SAIH rate-limit: se refresca en segundo plano y se evita llamar por cada click.
-POLL_SECONDS = int(os.getenv("SAIH_POLL_SECONDS", "180"))
-SAIH_BATCH_SIZE = max(1, int(os.getenv("SAIH_BATCH_SIZE", "20")))
-SAIH_BATCH_DELAY_SECONDS = float(os.getenv("SAIH_BATCH_DELAY_SECONDS", "12"))
-SAIH_REQUEST_MAX_SECONDS = float(os.getenv("SAIH_REQUEST_MAX_SECONDS", "15"))
-SAIH_RATE_LIMIT_COOLDOWN_SECONDS = int(os.getenv("SAIH_RATE_LIMIT_COOLDOWN_SECONDS", "300"))
-SAIH_REFRESH_ON_WS = os.getenv("SAIH_REFRESH_ON_WS", "0").lower() in {"1", "true", "yes"}
-SAIH_SITE_REFRESH_MIN_SECONDS = int(os.getenv("SAIH_SITE_REFRESH_MIN_SECONDS", "300"))
-SAIH_ACTUAL_SAMPLE_RETENTION_DAYS = int(os.getenv("SAIH_ACTUAL_SAMPLE_RETENTION_DAYS", "2"))
+POLL_SECONDS = env_int("SAIH_POLL_SECONDS", 180)
+SAIH_BATCH_SIZE = max(1, env_int("SAIH_BATCH_SIZE", 20))
+SAIH_BATCH_DELAY_SECONDS = env_float("SAIH_BATCH_DELAY_SECONDS", 12)
+SAIH_REQUEST_MAX_SECONDS = env_float("SAIH_REQUEST_MAX_SECONDS", 15)
+SAIH_RATE_LIMIT_COOLDOWN_SECONDS = env_int("SAIH_RATE_LIMIT_COOLDOWN_SECONDS", 300)
+SAIH_REFRESH_ON_WS = env_bool("SAIH_REFRESH_ON_WS", False)
+SAIH_SITE_REFRESH_MIN_SECONDS = env_int("SAIH_SITE_REFRESH_MIN_SECONDS", 300)
+SAIH_ACTUAL_SAMPLE_RETENTION_DAYS = env_int("SAIH_ACTUAL_SAMPLE_RETENTION_DAYS", 2)
 
 # AEMET: refresco real cada 30 min, comprobación cada 60s
 AEMET_REFRESH_SECONDS = 1800
 AEMET_CHECK_SECONDS = 60
-AEMET_ERROR_RETRY_SECONDS = int(os.getenv("AEMET_ERROR_RETRY_SECONDS", "300"))
-SAIH_STALE_HOURS = int(os.getenv("SAIH_STALE_HOURS", "72"))
-ALERT_CHECK_SECONDS = max(1, int(os.getenv("ALERT_CHECK_SECONDS", "5")))
-STARTUP_BACKGROUND_DELAY_SECONDS = int(os.getenv("STARTUP_BACKGROUND_DELAY_SECONDS", "30"))
-ALERT_STARTUP_DELAY_SECONDS = int(os.getenv("ALERT_STARTUP_DELAY_SECONDS", str(STARTUP_BACKGROUND_DELAY_SECONDS)))
-IA_REFRESH_SECONDS = int(os.getenv("IA_REFRESH_SECONDS", "3600"))
-IA_WORKERS = int(os.getenv("IA_WORKERS", "1"))
-IA_PROCESS_POOL_ENABLED = os.getenv("IA_PROCESS_POOL_ENABLED", "1").lower() in {"1", "true", "yes"}
-IA_REFRESH_ON_WS = os.getenv("IA_REFRESH_ON_WS", "0").lower() in {"1", "true", "yes"}
-IA_BOOTSTRAP_ON_WS = os.getenv("IA_BOOTSTRAP_ON_WS", "1").lower() in {"1", "true", "yes"}
+AEMET_ERROR_RETRY_SECONDS = env_int("AEMET_ERROR_RETRY_SECONDS", 300)
+SAIH_STALE_HOURS = env_int("SAIH_STALE_HOURS", 72)
+ALERT_CHECK_SECONDS = max(1, env_int("ALERT_CHECK_SECONDS", 5))
+STARTUP_BACKGROUND_DELAY_SECONDS = env_int("STARTUP_BACKGROUND_DELAY_SECONDS", 30)
+ALERT_STARTUP_DELAY_SECONDS = env_int("ALERT_STARTUP_DELAY_SECONDS", STARTUP_BACKGROUND_DELAY_SECONDS)
+IA_REFRESH_SECONDS = env_int("IA_REFRESH_SECONDS", 3600)
+IA_WORKERS = env_int("IA_WORKERS", 1)
+IA_PROCESS_POOL_ENABLED = env_bool("IA_PROCESS_POOL_ENABLED", True)
+IA_REFRESH_ON_WS = env_bool("IA_REFRESH_ON_WS", False)
+IA_BOOTSTRAP_ON_WS = env_bool("IA_BOOTSTRAP_ON_WS", True)
 IA_EXECUTOR = ProcessPoolExecutor(max_workers=IA_WORKERS) if IA_PROCESS_POOL_ENABLED else None
-HISTORY_DOWNLOAD_MAX_DAYS = int(os.getenv("HISTORY_DOWNLOAD_MAX_DAYS", "366"))
-HISTORY_CACHE_SECONDS = int(os.getenv("HISTORY_CACHE_SECONDS", "3600"))
-HISTORY_CACHE_MAX_ITEMS = int(os.getenv("HISTORY_CACHE_MAX_ITEMS", "32"))
-HISTORY_CACHE_MAX_BYTES = int(os.getenv("HISTORY_CACHE_MAX_BYTES", str(10 * 1024 * 1024)))
-PREDICTION_EVAL_LOOKBACK_DAYS = int(os.getenv("PREDICTION_EVAL_LOOKBACK_DAYS", "30"))
-RELIABILITY_CACHE_SECONDS = int(os.getenv("RELIABILITY_CACHE_SECONDS", "3600"))
-PREDICTION_RELIABILITY_PRECACHE = os.getenv("PREDICTION_RELIABILITY_PRECACHE", "1").lower() in {"1", "true", "yes"}
-PREDICTION_BACKFILL_FROM_FORECAST = os.getenv("PREDICTION_BACKFILL_FROM_FORECAST", "0").lower() in {"1", "true", "yes"}
-PREDICTION_EVAL_CHECK_SECONDS = int(os.getenv("PREDICTION_EVAL_CHECK_SECONDS", "3600"))
-PREDICTION_EVAL_INCLUDE_TODAY = os.getenv("PREDICTION_EVAL_INCLUDE_TODAY", "1").lower() in {"1", "true", "yes"}
-PREDICTION_EVAL_MIN_REFRESH_SECONDS = int(os.getenv("PREDICTION_EVAL_MIN_REFRESH_SECONDS", "600"))
-PREDICTION_DAILY_REFRESH_ENABLED = os.getenv("PREDICTION_DAILY_REFRESH_ENABLED", "1").lower() in {"1", "true", "yes"}
-PREDICTION_DAILY_REFRESH_HOUR = int(os.getenv("PREDICTION_DAILY_REFRESH_HOUR", "6"))
-PREDICTION_DAILY_REFRESH_MINUTE = int(os.getenv("PREDICTION_DAILY_REFRESH_MINUTE", "0"))
-PREDICTION_DAILY_CHECK_SECONDS = int(os.getenv("PREDICTION_DAILY_CHECK_SECONDS", "600"))
-PREDICTION_DAILY_STARTUP_GRACE_SECONDS = int(os.getenv("PREDICTION_DAILY_STARTUP_GRACE_SECONDS", "1800"))
-ADMIN_DEBUG = os.getenv("ADMIN_DEBUG", "0").lower() in {"1", "true", "yes"}
+HISTORY_DOWNLOAD_MAX_DAYS = env_int("HISTORY_DOWNLOAD_MAX_DAYS", 366)
+HISTORY_CACHE_SECONDS = env_int("HISTORY_CACHE_SECONDS", 3600)
+HISTORY_CACHE_MAX_ITEMS = env_int("HISTORY_CACHE_MAX_ITEMS", 32)
+HISTORY_CACHE_MAX_BYTES = env_int("HISTORY_CACHE_MAX_BYTES", 10 * 1024 * 1024)
+PREDICTION_EVAL_LOOKBACK_DAYS = env_int("PREDICTION_EVAL_LOOKBACK_DAYS", 30)
+RELIABILITY_CACHE_SECONDS = env_int("RELIABILITY_CACHE_SECONDS", 3600)
+PREDICTION_RELIABILITY_PRECACHE = env_bool("PREDICTION_RELIABILITY_PRECACHE", True)
+PREDICTION_BACKFILL_FROM_FORECAST = env_bool("PREDICTION_BACKFILL_FROM_FORECAST", True)
+PREDICTION_EVAL_CHECK_SECONDS = env_int("PREDICTION_EVAL_CHECK_SECONDS", 3600)
+PREDICTION_EVAL_INCLUDE_TODAY = env_bool("PREDICTION_EVAL_INCLUDE_TODAY", False)
+PREDICTION_EVAL_MIN_REFRESH_SECONDS = env_int("PREDICTION_EVAL_MIN_REFRESH_SECONDS", 600)
+PREDICTION_ACTUAL_BACKFILL_FROM_SAIH = env_bool("PREDICTION_ACTUAL_BACKFILL_FROM_SAIH", True)
+PREDICTION_ACTUAL_BACKFILL_MAX_DAYS = env_int("PREDICTION_ACTUAL_BACKFILL_MAX_DAYS", 7)
+PREDICTION_DAILY_REFRESH_ENABLED = env_bool("PREDICTION_DAILY_REFRESH_ENABLED", True)
+PREDICTION_DAILY_REFRESH_HOUR = env_int("PREDICTION_DAILY_REFRESH_HOUR", 6)
+PREDICTION_DAILY_REFRESH_MINUTE = env_int("PREDICTION_DAILY_REFRESH_MINUTE", 0)
+PREDICTION_DAILY_CHECK_SECONDS = env_int("PREDICTION_DAILY_CHECK_SECONDS", 600)
+PREDICTION_DAILY_STARTUP_GRACE_SECONDS = env_int("PREDICTION_DAILY_STARTUP_GRACE_SECONDS", 1800)
+ADMIN_DEBUG = env_bool("ADMIN_DEBUG", False)
 
 app = FastAPI()
 app.mount("/static", StaticFiles(directory=STATIC_DIR), name="static")
@@ -303,9 +310,9 @@ try:
 except Exception as e:
     logger.exception("PUSH TOKEN SYNC: error sincronizando tokens desde usuarios: %r", e)
 
-SESSION_COOKIE_NAME = os.getenv("SESSION_COOKIE_NAME", "rio_session")
-SESSION_COOKIE_SECURE = os.getenv("SESSION_COOKIE_SECURE", "0").lower() in {"1", "true", "yes"}
-SESSION_COOKIE_MAX_AGE = int(os.getenv("SESSION_COOKIE_MAX_AGE", str(60 * 60 * 24 * 30)))
+SESSION_COOKIE_NAME = env_value("SESSION_COOKIE_NAME", "rio_session")
+SESSION_COOKIE_SECURE = env_bool("SESSION_COOKIE_SECURE", False)
+SESSION_COOKIE_MAX_AGE = env_int("SESSION_COOKIE_MAX_AGE", 60 * 60 * 24 * 30)
 
 
 def _session_token(request: Request) -> str:
@@ -376,7 +383,7 @@ def _filter_alert_sites(site_ids: Optional[str], allow_all: bool = False):
 
 def _now_madrid() -> datetime:
     try:
-        return datetime.now(ZoneInfo(os.getenv("ALERT_TIMEZONE", "Europe/Madrid")))
+        return datetime.now(ZoneInfo(env_value("ALERT_TIMEZONE", "Europe/Madrid")))
     except Exception:
         return datetime.now()
 
@@ -584,6 +591,76 @@ def _daily_actuals_from_records(site: dict[str, Any], records: list[dict[str, An
     return actuals
 
 
+async def _backfill_daily_actuals_from_saih(site: dict[str, Any], dates: list[date]) -> dict[str, Any]:
+    if not PREDICTION_ACTUAL_BACKFILL_FROM_SAIH:
+        return {"checked": False, "stored": 0, "reason": "saih_backfill_disabled"}
+
+    tags = _prediction_actual_tags(site)
+    if not tags:
+        return {"checked": False, "stored": 0, "reason": "site_without_saih_signals"}
+
+    unique_dates = sorted({day for day in dates if isinstance(day, date)})
+    if not unique_dates:
+        return {"checked": True, "stored": 0, "reason": "no_dates"}
+
+    max_days = max(1, PREDICTION_ACTUAL_BACKFILL_MAX_DAYS)
+    if len(unique_dates) > max_days:
+        unique_dates = unique_dates[-max_days:]
+
+    cooldown_left = _saih_rate_limit_seconds_left()
+    if cooldown_left > 0:
+        return {
+            "checked": False,
+            "stored": 0,
+            "skipped": "saih_rate_limited",
+            "next_check_seconds": cooldown_left,
+        }
+
+    start_date = unique_dates[0]
+    end_date = unique_dates[-1]
+    max_seconds = max(12, min(60, len(unique_dates) * 10))
+
+    try:
+        records = await asyncio.to_thread(
+            fetch_saih_history,
+            tags,
+            start_date,
+            end_date,
+            (4, 12),
+            1,
+            max_seconds,
+        )
+        actuals = _daily_actuals_from_records(site, records)
+        wanted = {day.isoformat() for day in unique_dates}
+        actuals = {
+            day: actual
+            for day, actual in actuals.items()
+            if day in wanted
+        }
+        stored = await asyncio.to_thread(
+            prediction_store.store_daily_actuals,
+            site,
+            actuals,
+        )
+    except Exception as e:
+        logger.exception("PREDICTION ACTUAL SAIH BACKFILL ERROR site_id=%s error=%r", site.get("id"), e)
+        if _is_saih_rate_limit_error(e):
+            _set_saih_rate_limit(str(e))
+        return {
+            "checked": False,
+            "stored": 0,
+            "error": str(e),
+        }
+
+    return {
+        "checked": True,
+        "stored": stored,
+        "requested_dates": len(unique_dates),
+        "actual_dates": len(actuals),
+        "source": "saih_history",
+    }
+
+
 def _parse_saih_timestamp(value: Any) -> Optional[datetime]:
     if not value:
         return None
@@ -743,12 +820,12 @@ async def refresh_prediction_actuals_for_site(site_id: str, force: bool = False)
     if not site:
         return {"checked": False, "error": "site_not_found"}
 
-    backfill = await ensure_prediction_point_from_latest_forecast(site_id)
+    prediction_backfill = await ensure_prediction_point_from_latest_forecast(site_id)
     aggregate_result = await aggregate_stored_actuals()
 
     today = _today_madrid()
-    max_date = today if PREDICTION_EVAL_INCLUDE_TODAY else today - timedelta(days=1)
-    refresh_date = today if PREDICTION_EVAL_INCLUDE_TODAY else None
+    max_date = today - timedelta(days=1)
+    refresh_date = None
     pending_dates = await asyncio.to_thread(
         prediction_store.pending_actual_dates,
         site_id,
@@ -762,7 +839,7 @@ async def refresh_prediction_actuals_for_site(site_id: str, force: bool = False)
             "checked": True,
             "pending_dates": 0,
             "updated": 0,
-            "backfill": backfill,
+            "prediction_backfill": prediction_backfill,
             "daily_aggregates": aggregate_result,
             "source": "stored_daily_actuals",
         }
@@ -780,7 +857,7 @@ async def refresh_prediction_actuals_for_site(site_id: str, force: bool = False)
             "checked": True,
             "pending_dates": len(pending_dates),
             "updated": 0,
-            "backfill": backfill,
+            "prediction_backfill": prediction_backfill,
             "daily_aggregates": aggregate_result,
             "skipped": "recently_checked",
             "next_check_seconds": round(PREDICTION_EVAL_MIN_REFRESH_SECONDS - (now_epoch - last_epoch)),
@@ -793,6 +870,23 @@ async def refresh_prediction_actuals_for_site(site_id: str, force: bool = False)
             site_id,
             pending_dates,
         )
+        missing_dates = [
+            day
+            for day in pending_dates
+            if day.isoformat() not in actuals
+        ]
+        actual_backfill = (
+            await _backfill_daily_actuals_from_saih(site, missing_dates)
+            if missing_dates
+            else {"checked": False, "stored": 0, "reason": "no_missing_dates"}
+        )
+        if missing_dates and actual_backfill.get("stored"):
+            actuals = await asyncio.to_thread(
+                prediction_store.daily_actuals_by_date,
+                site_id,
+                pending_dates,
+            )
+
         updated = await asyncio.to_thread(prediction_store.update_actuals, site_id, actuals)
         if updated:
             ia_reliability_cache_by_site.pop(site_id, None)
@@ -803,7 +897,7 @@ async def refresh_prediction_actuals_for_site(site_id: str, force: bool = False)
             "checked": False,
             "pending_dates": len(pending_dates),
             "updated": 0,
-            "backfill": backfill,
+            "prediction_backfill": prediction_backfill,
             "daily_aggregates": aggregate_result,
             "error": str(e),
         }
@@ -812,9 +906,10 @@ async def refresh_prediction_actuals_for_site(site_id: str, force: bool = False)
         "checked": True,
         "pending_dates": len(pending_dates),
         "updated": updated,
-        "backfill": backfill,
+        "prediction_backfill": prediction_backfill,
         "daily_aggregates": aggregate_result,
         "daily_actual_dates": len(actuals),
+        "actual_backfill": actual_backfill,
         "source": "stored_daily_actuals",
         "skipped": None if actuals else "daily_actuals_not_available",
     }
@@ -1850,10 +1945,20 @@ async def refresh_ia_for_site(
     logger.info("IA refresh iniciado site_id=%s", site_id)
 
     try:
+        prediction_use_live_saih = (
+            True
+            if force and use_live_saih is None
+            else use_live_saih
+        )
+        prediction_allow_stale_fallback = (
+            False
+            if force and allow_stale_fallback is None
+            else allow_stale_fallback
+        )
         prediction_result = await _run_prediction(
             site_id,
-            use_live_saih=True if force else use_live_saih,
-            allow_stale_fallback=False if force else allow_stale_fallback,
+            use_live_saih=prediction_use_live_saih,
+            allow_stale_fallback=prediction_allow_stale_fallback,
         )
         if isinstance(prediction_result, dict):
             pred = prediction_result.get("predictions") or []
@@ -2438,14 +2543,37 @@ async def poll_daily_prediction_loop():
                 microsecond=0,
             )
 
-            if now >= scheduled and today_key not in daily_prediction_dates_run:
+            if now >= scheduled:
                 logger.info("PREDICTION DAILY: guardando predicciones D+1 para %s", today_key)
 
-                for site in SITES:
-                    await refresh_ia_for_site(site["id"], force=True)
-                    await asyncio.sleep(0.5)
+                await aggregate_stored_actuals()
 
-                daily_prediction_dates_run.add(today_key)
+                for site in SITES:
+                    run_key = f"{today_key}:{site['id']}"
+                    if run_key in daily_prediction_dates_run:
+                        continue
+
+                    await refresh_ia_for_site(
+                        site["id"],
+                        force=True,
+                        store_evaluation=True,
+                        use_live_saih=None,
+                        allow_stale_fallback=False,
+                    )
+                    state = ia_cache_by_site.get(site["id"], {})
+                    stored = int(state.get("pred_semana_persistida") or 0)
+                    forecast_backfill = await ensure_prediction_point_from_latest_forecast(site["id"])
+                    stored += int(forecast_backfill.get("stored") or 0)
+
+                    if stored:
+                        daily_prediction_dates_run.add(run_key)
+                    else:
+                        logger.warning(
+                            "PREDICTION DAILY: no se pudo guardar D+1 site_id=%s; se reintentara",
+                            site["id"],
+                        )
+
+                    await asyncio.sleep(0.5)
 
         except Exception as e:
             logger.exception("PREDICTION DAILY LOOP ERROR error=%r", e)

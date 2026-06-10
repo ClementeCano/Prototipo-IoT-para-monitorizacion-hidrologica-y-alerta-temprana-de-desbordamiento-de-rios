@@ -14,10 +14,12 @@ os.environ.setdefault("TF_CPP_MIN_LOG_LEVEL", "2")
 try:
     from app.api.saih_opendata import fetch_saih_history
     from app.core.config import SITES
+    from app.env_utils import env_bool, env_float, env_int
     from app.logging_config import configure_logging
 except ImportError:
     from api.saih_opendata import fetch_saih_history
     from core.config import SITES
+    from env_utils import env_bool, env_float, env_int
     from logging_config import configure_logging
 
 configure_logging()
@@ -29,17 +31,17 @@ logger.debug("BASE_DIR: %s", BASE_DIR)
 
 VENTANA = 14
 HORIZONTE = 7
-LIVE_SAIH_LOOKBACK_DAYS = int(os.getenv("PREDICTION_LIVE_SAIH_LOOKBACK_DAYS", "21"))
-LIVE_SAIH_CACHE_SECONDS = int(os.getenv("PREDICTION_LIVE_SAIH_CACHE_SECONDS", "1800"))
-LIVE_SAIH_REQUEST_TIMEOUT_SECONDS = float(os.getenv("PREDICTION_LIVE_SAIH_REQUEST_TIMEOUT_SECONDS", "5"))
-LIVE_SAIH_MAX_SECONDS = float(os.getenv("PREDICTION_LIVE_SAIH_MAX_SECONDS", "25"))
-USE_LIVE_SAIH_WINDOW = os.getenv("PREDICTION_USE_LIVE_SAIH", "1").lower() in {"1", "true", "yes"}
-USE_STORED_DAILY_WINDOW = os.getenv("PREDICTION_USE_STORED_DAILY", "1").lower() in {"1", "true", "yes"}
-STORED_DAILY_LOOKBACK_DAYS = int(os.getenv("PREDICTION_STORED_DAILY_LOOKBACK_DAYS", "60"))
-STORED_DAILY_MIN_DAYS = int(os.getenv("PREDICTION_STORED_DAILY_MIN_DAYS", str(VENTANA + 1)))
-STORED_DAILY_CACHE_SECONDS = int(os.getenv("PREDICTION_STORED_DAILY_CACHE_SECONDS", "300"))
-MAX_DATASET_STALENESS_DAYS = int(os.getenv("PREDICTION_MAX_DATASET_STALENESS_DAYS", "14"))
-ALLOW_STALE_DATASET_FALLBACK = os.getenv("PREDICTION_ALLOW_STALE_DATASET_FALLBACK", "0").lower() in {"1", "true", "yes"}
+LIVE_SAIH_LOOKBACK_DAYS = env_int("PREDICTION_LIVE_SAIH_LOOKBACK_DAYS", 21)
+LIVE_SAIH_CACHE_SECONDS = env_int("PREDICTION_LIVE_SAIH_CACHE_SECONDS", 1800)
+LIVE_SAIH_REQUEST_TIMEOUT_SECONDS = env_float("PREDICTION_LIVE_SAIH_REQUEST_TIMEOUT_SECONDS", 5)
+LIVE_SAIH_MAX_SECONDS = env_float("PREDICTION_LIVE_SAIH_MAX_SECONDS", 25)
+USE_LIVE_SAIH_WINDOW = env_bool("PREDICTION_USE_LIVE_SAIH", True)
+USE_STORED_DAILY_WINDOW = env_bool("PREDICTION_USE_STORED_DAILY", True)
+STORED_DAILY_LOOKBACK_DAYS = env_int("PREDICTION_STORED_DAILY_LOOKBACK_DAYS", 60)
+STORED_DAILY_MIN_DAYS = env_int("PREDICTION_STORED_DAILY_MIN_DAYS", VENTANA + 1)
+STORED_DAILY_CACHE_SECONDS = env_int("PREDICTION_STORED_DAILY_CACHE_SECONDS", 300)
+MAX_DATASET_STALENESS_DAYS = env_int("PREDICTION_MAX_DATASET_STALENESS_DAYS", 14)
+ALLOW_STALE_DATASET_FALLBACK = env_bool("PREDICTION_ALLOW_STALE_DATASET_FALLBACK", False)
 SITES_BY_ID = {site["id"]: site for site in SITES}
 _ARTIFACT_CACHE = {}
 _DATASET_CACHE = {}
@@ -413,6 +415,19 @@ def _predict_from_window(artifacts, window_df: pd.DataFrame):
     return pred_nivel, pred_caudal
 
 
+def _prediction_target_date(input_last_date: str | None, offset_days: int) -> str | None:
+    if not input_last_date:
+        return None
+
+    try:
+        parsed = pd.to_datetime(input_last_date, errors="coerce")
+        if pd.isna(parsed):
+            return None
+        return (parsed.date() + timedelta(days=offset_days)).isoformat()
+    except Exception:
+        return None
+
+
 def predecir_semana_municipio_detallada(
     site_id: str,
     use_live_saih: bool | None = None,
@@ -447,14 +462,19 @@ def predecir_semana_municipio_detallada(
             }
 
         pred_nivel, pred_caudal = _predict_from_window(artifacts, df)
+        input_last_date = df.attrs.get("prediction_input_last_date")
 
         return {
             "predictions": [
-                {"nivel": float(n), "caudal": float(c)}
-                for n, c in zip(pred_nivel, pred_caudal)
+                {
+                    "nivel": float(n),
+                    "caudal": float(c),
+                    "target_date": _prediction_target_date(input_last_date, index + 1),
+                }
+                for index, (n, c) in enumerate(zip(pred_nivel, pred_caudal))
             ],
             "source": df.attrs.get("prediction_source"),
-            "input_last_date": df.attrs.get("prediction_input_last_date"),
+            "input_last_date": input_last_date,
             "stale": bool(df.attrs.get("prediction_stale")),
         }
 

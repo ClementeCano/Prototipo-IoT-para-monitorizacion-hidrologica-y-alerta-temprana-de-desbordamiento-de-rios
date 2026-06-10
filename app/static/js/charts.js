@@ -540,10 +540,16 @@ function setConn(isUp) {
           message = `No hay validacion disponible: ${data.error}`;
         } else if (update.error) {
           message = "No se han podido leer las medias diarias guardadas para completar la comparativa. Se reintentara automaticamente.";
+        } else if (update.actual_backfill?.error) {
+          message = "SAIH Ebro no ha permitido completar la media real diaria ahora mismo. No es un fallo de la web; se reintentara automaticamente.";
+        } else if (update.actual_backfill?.skipped === "saih_rate_limited") {
+          message = `SAIH Ebro ha limitado temporalmente las peticiones. Se reintentara automaticamente en ${update.actual_backfill.next_check_seconds || "unos"} segundos.`;
         } else if (update.skipped === "saih_rate_limited") {
           message = `SAIH Ebro ha limitado temporalmente las peticiones. Se reintentara automaticamente en ${update.next_check_seconds || "unos"} segundos.`;
         } else if (update.skipped === "recently_checked") {
           message = `Ya hay predicciones D+1 guardadas y las medias diarias se han revisado hace poco. Se reintentara en ${update.next_check_seconds || "unos"} segundos.`;
+        } else if ((data?.legacy_points || 0) > 0) {
+          message = "Las predicciones antiguas no incluyen fecha objetivo fiable y no se usan para validar. La comparativa se rellenara con las nuevas predicciones D+1.";
         } else if (data?.total > 0) {
           message = "Hay predicciones D+1 guardadas, pero aun no existe una media diaria real para ese dia.";
         }

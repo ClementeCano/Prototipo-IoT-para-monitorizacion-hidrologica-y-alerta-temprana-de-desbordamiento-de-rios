@@ -13,6 +13,11 @@ import psycopg2
 from psycopg2 import pool
 from psycopg2.extras import Json, RealDictCursor
 
+try:
+    from app.env_utils import env_int, env_value
+except ImportError:
+    from env_utils import env_int, env_value
+
 from app.user_store import (
     DEFAULT_PREFERENCES,
     SESSION_DAYS,
@@ -56,8 +61,8 @@ class PostgresUserStore:
         self.path = _safe_database_label(database_url)
         self.sites_by_id = sites_by_id or {}
         self.lock = RLock()
-        minconn = int(os.getenv("POSTGRES_POOL_MIN", str(minconn)))
-        maxconn = int(os.getenv("POSTGRES_POOL_MAX", str(maxconn)))
+        minconn = env_int("POSTGRES_POOL_MIN", minconn)
+        maxconn = env_int("POSTGRES_POOL_MAX", maxconn)
         self.pool = pool.ThreadedConnectionPool(minconn, maxconn, dsn=database_url)
         self._ensure_schema()
 
@@ -809,7 +814,7 @@ class PostgresUserStore:
         try:
             from zoneinfo import ZoneInfo
 
-            return datetime.now(ZoneInfo(os.getenv("ALERT_TIMEZONE", "Europe/Madrid")))
+            return datetime.now(ZoneInfo(env_value("ALERT_TIMEZONE", "Europe/Madrid")))
         except Exception:
             return datetime.now()
 

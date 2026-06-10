@@ -14,8 +14,10 @@ from urllib.parse import quote_plus
 from zoneinfo import ZoneInfo
 
 try:
+    from app.env_utils import env_bool, env_int, env_value
     from app.logging_config import configure_logging
 except ImportError:
+    from env_utils import env_bool, env_int, env_value
     from logging_config import configure_logging
 
 configure_logging()
@@ -23,10 +25,10 @@ logger = logging.getLogger(__name__)
 
 
 BASE_DIR = Path(__file__).resolve().parent
-DATA_DIR = Path(os.getenv("DATA_DIR", BASE_DIR)).resolve()
-USERS_FILE = Path(os.getenv("USERS_FILE", DATA_DIR / "users.json")).resolve()
-SESSION_DAYS = int(os.getenv("SESSION_DAYS", "30"))
-ALERT_TIMEZONE = os.getenv("ALERT_TIMEZONE", "Europe/Madrid")
+DATA_DIR = Path(env_value("DATA_DIR", str(BASE_DIR))).resolve()
+USERS_FILE = Path(env_value("USERS_FILE", str(DATA_DIR / "users.json"))).resolve()
+SESSION_DAYS = env_int("SESSION_DAYS", 30)
+ALERT_TIMEZONE = env_value("ALERT_TIMEZONE", "Europe/Madrid")
 
 EMAIL_RE = re.compile(r"^[^@\s]+@[^@\s]+\.[^@\s]+$")
 VALID_CHANNELS = {"push", "email"}
@@ -748,11 +750,11 @@ class UserStore:
 
 
 def create_user_store(sites_by_id: Optional[dict[str, Any]] = None):
-    backend = os.getenv("USER_STORE_BACKEND", "auto").strip().lower()
+    backend = env_value("USER_STORE_BACKEND", "auto").strip().lower()
     database_url = (
-        os.getenv("DATABASE_URL")
-        or os.getenv("POSTGRES_URL")
-        or os.getenv("POSTGRES_DATABASE_URL")
+        env_value("DATABASE_URL")
+        or env_value("POSTGRES_URL")
+        or env_value("POSTGRES_DATABASE_URL")
         or _database_url_from_parts()
     )
 
@@ -770,7 +772,7 @@ def create_user_store(sites_by_id: Optional[dict[str, Any]] = None):
 
         store = PostgresUserStore(database_url=database_url, sites_by_id=sites_by_id)
 
-        if os.getenv("MIGRATE_USERS_JSON_ON_START", "1").lower() in {"1", "true", "yes"}:
+        if env_bool("MIGRATE_USERS_JSON_ON_START", True):
             imported = store.import_json_file(USERS_FILE)
             if imported:
                 logger.info("POSTGRES MIGRATION: importados %s usuarios desde %s", imported, USERS_FILE)
@@ -781,13 +783,13 @@ def create_user_store(sites_by_id: Optional[dict[str, Any]] = None):
 
 
 def _database_url_from_parts() -> Optional[str]:
-    name = os.getenv("DB_NAME")
-    user = os.getenv("DB_USER")
-    password = os.getenv("DB_PASSWORD")
-    host = os.getenv("DB_HOST")
-    port = os.getenv("DB_PORT", "5432")
+    name = env_value("DB_NAME")
+    user = env_value("DB_USER")
+    password = env_value("DB_PASSWORD")
+    host = env_value("DB_HOST")
+    port = env_value("DB_PORT", "5432")
     default_sslmode = "require" if host and "neon.tech" in host else ""
-    sslmode = os.getenv("DB_SSLMODE", default_sslmode).strip()
+    sslmode = env_value("DB_SSLMODE", default_sslmode).strip()
 
     if not all([name, user, password, host]):
         return None

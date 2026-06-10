@@ -25,28 +25,30 @@ for stream in (sys.stdout, sys.stderr):
         pass
 
 try:
+    from app.env_utils import env_bool, env_int, env_value
     from app.prediccion_individual import predecir_semana_municipio
     from app.umbrales import cargar_umbrales
 except ImportError:
-    from app.prediccion_individual import predecir_semana_municipio
-    from app.umbrales import cargar_umbrales
+    from env_utils import env_bool, env_int, env_value
+    from prediccion_individual import predecir_semana_municipio
+    from umbrales import cargar_umbrales
 
 # =========================
 # CONFIG
 # =========================
 UMBRALES = cargar_umbrales()
-PUBLIC_BASE_URL = os.getenv("PUBLIC_BASE_URL", "https://dashboard-ebro.fly.dev").rstrip("/")
+PUBLIC_BASE_URL = env_value("PUBLIC_BASE_URL", "https://dashboard-ebro.fly.dev").rstrip("/")
 PUSH_ICON_URL = f"{PUBLIC_BASE_URL}/static/icon.png"
-ALERT_HOUR = int(os.getenv("ALERT_HOUR", "8"))
-ALERT_MINUTE = int(os.getenv("ALERT_MINUTE", "0"))
-ALERT_TIMEZONE = os.getenv("ALERT_TIMEZONE", "Europe/Madrid")
-SMTP_HOST = os.getenv("SMTP_HOST", "").strip()
-SMTP_PORT = int(os.getenv("SMTP_PORT", "587"))
-SMTP_USER = os.getenv("SMTP_USER", "").strip()
-SMTP_PASSWORD = os.getenv("SMTP_PASSWORD", "")
-SMTP_FROM = os.getenv("SMTP_FROM", SMTP_USER or "alertas@rio-ebro.local").strip()
-SMTP_STARTTLS = os.getenv("SMTP_STARTTLS", "1").lower() in {"1", "true", "yes"}
-SMTP_SSL = os.getenv("SMTP_SSL", "0").lower() in {"1", "true", "yes"}
+ALERT_HOUR = env_int("ALERT_HOUR", 8)
+ALERT_MINUTE = env_int("ALERT_MINUTE", 0)
+ALERT_TIMEZONE = env_value("ALERT_TIMEZONE", "Europe/Madrid")
+SMTP_HOST = env_value("SMTP_HOST", "").strip()
+SMTP_PORT = env_int("SMTP_PORT", 587)
+SMTP_USER = env_value("SMTP_USER", "").strip()
+SMTP_PASSWORD = env_value("SMTP_PASSWORD", "")
+SMTP_FROM = env_value("SMTP_FROM", SMTP_USER or "alertas@rio-ebro.local").strip()
+SMTP_STARTTLS = env_bool("SMTP_STARTTLS", True)
+SMTP_SSL = env_bool("SMTP_SSL", False)
 
 # evitar enviar múltiples veces el mismo día
 ULTIMO_ENVIO = None

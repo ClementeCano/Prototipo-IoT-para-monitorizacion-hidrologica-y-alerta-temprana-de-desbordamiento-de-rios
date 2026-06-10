@@ -12,8 +12,10 @@ import urllib3
 from urllib3.exceptions import InsecureRequestWarning
 
 try:
+    from app.env_utils import env_bool, env_float, env_int, env_value
     from app.logging_config import configure_logging
 except ImportError:
+    from env_utils import env_bool, env_float, env_int, env_value
     from logging_config import configure_logging
 
 configure_logging()
@@ -27,10 +29,10 @@ except Exception:
     pass
 
 URL = "https://www.saihebro.com/datos/apiopendata"
-HISTORY_REQUEST_DELAY_SECONDS = float(os.getenv("SAIH_HISTORY_REQUEST_DELAY_SECONDS", "0.1"))
-SAIH_SSL_MODE = os.getenv("SAIH_SSL_MODE", "auto").strip().lower()
-SAIH_VERIFY_SSL = os.getenv("SAIH_VERIFY_SSL", "1").lower() not in {"0", "false", "no"}
-SAIH_HTTP_RETRIES = max(0, int(os.getenv("SAIH_HTTP_RETRIES", "0")))
+HISTORY_REQUEST_DELAY_SECONDS = env_float("SAIH_HISTORY_REQUEST_DELAY_SECONDS", 0.1)
+SAIH_SSL_MODE = env_value("SAIH_SSL_MODE", "auto").strip().lower()
+SAIH_VERIFY_SSL = env_bool("SAIH_VERIFY_SSL", True)
+SAIH_HTTP_RETRIES = max(0, env_int("SAIH_HTTP_RETRIES", 0))
 _WARNED_INSECURE_SSL = False
 _WORKING_VERIFY = None
 
@@ -153,7 +155,7 @@ def fetch_saih_signals(
       { TAG: {fecha, valor, tendencia, unidades, descripcion} }
     """
 
-    apikey = os.getenv("SAIH_APIKEY", "")
+    apikey = env_value("SAIH_APIKEY", "")
     if not apikey:
         raise RuntimeError("Falta SAIH_APIKEY (en .env o variable de entorno).")
 
@@ -234,7 +236,7 @@ def fetch_saih_history(
     por eso se itera dia a dia.
     """
 
-    apikey = os.getenv("SAIH_APIKEY", "")
+    apikey = env_value("SAIH_APIKEY", "")
     if not apikey:
         raise RuntimeError("Falta SAIH_APIKEY (en .env o variable de entorno).")
 
