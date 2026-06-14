@@ -277,10 +277,11 @@ HISTORY_DOWNLOAD_MAX_DAYS = env_int("HISTORY_DOWNLOAD_MAX_DAYS", 366)
 HISTORY_CACHE_SECONDS = env_int("HISTORY_CACHE_SECONDS", 3600)
 HISTORY_CACHE_MAX_ITEMS = env_int("HISTORY_CACHE_MAX_ITEMS", 32)
 HISTORY_CACHE_MAX_BYTES = env_int("HISTORY_CACHE_MAX_BYTES", 10 * 1024 * 1024)
-PREDICTION_EVAL_LOOKBACK_DAYS = env_int("PREDICTION_EVAL_LOOKBACK_DAYS", 30)
+PREDICTION_EVAL_LOOKBACK_DAYS = env_int("PREDICTION_EVAL_LOOKBACK_DAYS", 7)
 RELIABILITY_CACHE_SECONDS = env_int("RELIABILITY_CACHE_SECONDS", 3600)
 PREDICTION_RELIABILITY_PRECACHE = env_bool("PREDICTION_RELIABILITY_PRECACHE", True)
 PREDICTION_BACKFILL_FROM_FORECAST = env_bool("PREDICTION_BACKFILL_FROM_FORECAST", True)
+PREDICTION_FORECAST_BACKFILL_MAX_AGE_DAYS = env_int("PREDICTION_FORECAST_BACKFILL_MAX_AGE_DAYS", 2)
 PREDICTION_EVAL_CHECK_SECONDS = env_int("PREDICTION_EVAL_CHECK_SECONDS", 3600)
 PREDICTION_EVAL_INCLUDE_TODAY = env_bool("PREDICTION_EVAL_INCLUDE_TODAY", False)
 PREDICTION_EVAL_MIN_REFRESH_SECONDS = env_int("PREDICTION_EVAL_MIN_REFRESH_SECONDS", 600)
@@ -290,7 +291,7 @@ PREDICTION_ACTUAL_BACKFILL_REQUEST_DELAY_SECONDS = env_float("PREDICTION_ACTUAL_
 PREDICTION_ACTUAL_BACKFILL_RATE_LIMIT_SLEEP_SECONDS = env_float("PREDICTION_ACTUAL_BACKFILL_RATE_LIMIT_SLEEP_SECONDS", 20)
 PREDICTION_ACTUAL_BACKFILL_RATE_LIMIT_ABORT_SECONDS = env_float("PREDICTION_ACTUAL_BACKFILL_RATE_LIMIT_ABORT_SECONDS", 600)
 PREDICTION_DAILY_REFRESH_ENABLED = env_bool("PREDICTION_DAILY_REFRESH_ENABLED", True)
-PREDICTION_DAILY_REFRESH_HOUR = env_int("PREDICTION_DAILY_REFRESH_HOUR", 6)
+PREDICTION_DAILY_REFRESH_HOUR = env_int("PREDICTION_DAILY_REFRESH_HOUR", 0)
 PREDICTION_DAILY_REFRESH_MINUTE = env_int("PREDICTION_DAILY_REFRESH_MINUTE", 0)
 PREDICTION_DAILY_CHECK_SECONDS = env_int("PREDICTION_DAILY_CHECK_SECONDS", 600)
 PREDICTION_DAILY_STARTUP_GRACE_SECONDS = env_int("PREDICTION_DAILY_STARTUP_GRACE_SECONDS", 1800)
@@ -393,6 +394,23 @@ def _now_madrid() -> datetime:
 
 def _today_madrid() -> date:
     return _now_madrid().date()
+
+
+def _date_from_any(value: Any) -> Optional[date]:
+    if not value:
+        return None
+
+    parsed = pd.to_datetime(value, errors="coerce", utc=True)
+    if pd.isna(parsed):
+        return None
+
+    try:
+        return parsed.tz_convert(ZoneInfo(env_value("ALERT_TIMEZONE", "Europe/Madrid"))).date()
+    except Exception:
+        try:
+            return parsed.date()
+        except Exception:
+            return None
 
 
 def _parse_iso_date(value: str, field_name: str) -> date:
@@ -776,7 +794,12 @@ def _set_saih_rate_limit(reason: str) -> None:
     )
 
 
-async def ensure_prediction_point_from_latest_forecast(site_id: str) -> dict[str, Any]:
+async def ensure_prediction_point_from_latest_forecast(
+    site_id: str,
+    *,
+    expected_issued_date: Optional[date] = None,
+    max_age_days: Optional[int] = None,
+) -> dict[str, Any]:
     if not PREDICTION_BACKFILL_FROM_FORECAST:
         return {
             "checked": False,
@@ -800,6 +823,38 @@ async def ensure_prediction_point_from_latest_forecast(site_id: str) -> dict[str
     if not predictions or not issued_at:
         return {"checked": True, "stored": 0, "reason": "forecast_not_available"}
 
+    issued_date = _date_from_any(issued_at)
+    if not issued_date:
+        return {
+            "checked": True,
+            "stored": 0,
+            "reason": "forecast_issued_date_invalid",
+            "issued_at": issued_at,
+        }
+
+    if expected_issued_date is not None and issued_date != expected_issued_date:
+        return {
+            "checked": True,
+            "stored": 0,
+            "reason": "forecast_not_from_expected_date",
+            "issued_at": issued_at,
+            "issued_date": issued_date.isoformat(),
+            "expected_issued_date": expected_issued_date.isoformat(),
+        }
+
+    max_age = PREDICTION_FORECAST_BACKFILL_MAX_AGE_DAYS if max_age_days is None else max_age_days
+    if max_age >= 0:
+        oldest_allowed = _today_madrid() - timedelta(days=max_age)
+        if issued_date < oldest_allowed:
+            return {
+                "checked": True,
+                "stored": 0,
+                "reason": "forecast_too_old",
+                "issued_at": issued_at,
+                "issued_date": issued_date.isoformat(),
+                "oldest_allowed": oldest_allowed.isoformat(),
+            }
+
     try:
         stored = await asyncio.to_thread(
             prediction_store.store_prediction,
@@ -818,6 +873,7 @@ async def ensure_prediction_point_from_latest_forecast(site_id: str) -> dict[str
         "checked": True,
         "stored": stored,
         "issued_at": issued_at,
+        "issued_date": issued_date.isoformat(),
     }
 
 
@@ -830,7 +886,10 @@ async def refresh_prediction_actuals_for_site(site_id: str, force: bool = False)
     max_completed_date = today - timedelta(days=1)
     max_date = today if PREDICTION_EVAL_INCLUDE_TODAY else max_completed_date
 
-    prediction_backfill = await ensure_prediction_point_from_latest_forecast(site_id)
+    prediction_backfill = await ensure_prediction_point_from_latest_forecast(
+        site_id,
+        max_age_days=PREDICTION_FORECAST_BACKFILL_MAX_AGE_DAYS,
+    )
     aggregate_result = await aggregate_stored_actuals(max_date)
     refresh_date = None
     pending_dates = await asyncio.to_thread(
@@ -2570,7 +2629,10 @@ async def save_daily_d1_prediction_for_site(site_id: str, run_date: date) -> dic
     )
     state = ia_cache_by_site.get(site_id, {})
     stored = int(state.get("pred_semana_persistida") or 0)
-    forecast_backfill = await ensure_prediction_point_from_latest_forecast(site_id)
+    forecast_backfill = await ensure_prediction_point_from_latest_forecast(
+        site_id,
+        expected_issued_date=run_date,
+    )
     stored += int(forecast_backfill.get("stored") or 0)
 
     if stored:

@@ -46,6 +46,12 @@ def _today() -> date:
         return date.today()
 
 
+def _evaluation_date_window(days: int) -> tuple[date, date]:
+    window_days = max(1, min(int(days or 30), 90))
+    end_date = _today()
+    return end_date - timedelta(days=window_days), end_date
+
+
 def _date_from_issued_at(value: Optional[str]) -> date:
     if not value:
         return _today()
@@ -891,23 +897,20 @@ class JsonPredictionStore:
             return updated
 
     def evaluation(self, site_id: str, limit: int = 30) -> dict[str, Any]:
+        min_target_date, max_target_date = _evaluation_date_window(limit)
+
         with self.lock:
             data = self._load_unlocked()
             records = [
                 record
                 for record in data.get("predictions", [])
                 if record.get("siteId") == site_id and int(record.get("horizonDay") or 0) == 1
+                and (
+                    (target_date := _parse_iso_date(record.get("targetDate"))) is not None
+                    and min_target_date <= target_date <= max_target_date
+                )
             ]
 
-        pending = sum(
-            1
-            for record in records
-            if (
-                record.get("nivelPred") is not None and record.get("nivelReal") is None
-            ) or (
-                record.get("caudalPred") is not None and record.get("caudalReal") is None
-            )
-        )
         records.sort(key=lambda item: (item.get("targetDate", ""), item.get("issuedDate", ""), item.get("horizonDay", 0)))
         records = records[-max(1, min(int(limit or 30), 90)):]
         points = [_public_point(record) for record in records]
@@ -1444,6 +1447,7 @@ class PostgresPredictionStore:
 
     def evaluation(self, site_id: str, limit: int = 30) -> dict[str, Any]:
         limit = max(1, min(int(limit or 30), 90))
+        min_target_date, max_target_date = _evaluation_date_window(limit)
 
         with self._connection() as conn:
             with conn.cursor(cursor_factory=RealDictCursor) as cur:
@@ -1457,8 +1461,10 @@ class PostgresPredictionStore:
                     FROM prediction_points
                     WHERE site_id = %s
                       AND horizon_day = 1
+                      AND target_date >= %s
+                      AND target_date <= %s
                     """,
-                    (site_id,),
+                    (site_id, min_target_date, max_target_date),
                 )
                 counts = dict(cur.fetchone() or {})
 
@@ -1469,10 +1475,12 @@ class PostgresPredictionStore:
                     FROM prediction_points
                     WHERE site_id = %s
                       AND horizon_day = 1
+                      AND target_date >= %s
+                      AND target_date <= %s
                     ORDER BY target_date DESC, issued_date DESC, horizon_day DESC
                     LIMIT %s
                     """,
-                    (site_id, limit),
+                    (site_id, min_target_date, max_target_date, limit),
                 )
                 rows = [dict(row) for row in cur.fetchall()]
 
