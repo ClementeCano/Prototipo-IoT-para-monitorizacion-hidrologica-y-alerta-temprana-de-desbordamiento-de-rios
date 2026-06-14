@@ -170,7 +170,7 @@ def _prediction_rows(site: dict[str, Any], predictions: list[dict[str, Any]], is
 
     now = issued_at or _iso_now()
     issued_date = _date_from_issued_at(now)
-    desired_target_date = issued_date + timedelta(days=1)
+    fallback_target_date = issued_date + timedelta(days=1)
     rows = []
 
     for index, point in enumerate(predictions or []):
@@ -187,10 +187,10 @@ def _prediction_rows(site: dict[str, Any], predictions: list[dict[str, Any]], is
         target_source = "prediction_point_date"
 
         if point_target is None and index == 0:
-            point_target = desired_target_date
+            point_target = fallback_target_date
             target_source = "issued_date_plus_horizon"
 
-        if point_target is None or point_target != desired_target_date:
+        if point_target is None or point_target < issued_date:
             continue
 
         target_date = point_target

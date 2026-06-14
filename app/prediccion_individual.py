@@ -41,6 +41,7 @@ USE_LIVE_SAIH_WINDOW = env_bool("PREDICTION_USE_LIVE_SAIH", True)
 USE_STORED_DAILY_WINDOW = env_bool("PREDICTION_USE_STORED_DAILY", True)
 STORED_DAILY_LOOKBACK_DAYS = env_int("PREDICTION_STORED_DAILY_LOOKBACK_DAYS", 60)
 STORED_DAILY_MIN_DAYS = env_int("PREDICTION_STORED_DAILY_MIN_DAYS", VENTANA + 1)
+STORED_DAILY_MIN_RECENT_DAYS = env_int("PREDICTION_STORED_DAILY_MIN_RECENT_DAYS", 3)
 STORED_DAILY_CACHE_SECONDS = env_int("PREDICTION_STORED_DAILY_CACHE_SECONDS", 300)
 MAX_DATASET_STALENESS_DAYS = env_int("PREDICTION_MAX_DATASET_STALENESS_DAYS", 14)
 ALLOW_STALE_DATASET_FALLBACK = env_bool("PREDICTION_ALLOW_STALE_DATASET_FALLBACK", False)
@@ -174,7 +175,7 @@ def _get_prediction_store():
     return _PREDICTION_STORE
 
 
-def _load_stored_daily_prediction_window(site_id: str) -> pd.DataFrame | None:
+def _load_stored_daily_prediction_window(site_id: str, base_df: pd.DataFrame | None = None) -> pd.DataFrame | None:
     if not USE_STORED_DAILY_WINDOW:
         return None
 
@@ -190,39 +191,78 @@ def _load_stored_daily_prediction_window(site_id: str) -> pd.DataFrame | None:
         logger.warning("IA %s: no se pudieron leer medias diarias persistidas: %s", site_id, exc)
         return None
 
+    min_recent_days = max(1, min(int(STORED_DAILY_MIN_RECENT_DAYS or 1), VENTANA))
+    if len(records) < min_recent_days:
+        return None
+
+    daily_df = pd.DataFrame(records)
+    if daily_df.empty:
+        return None
+
     min_days = max(VENTANA + 1, min(int(STORED_DAILY_MIN_DAYS or VENTANA + 1), STORED_DAILY_LOOKBACK_DAYS))
-    if len(records) < min_days:
-        return None
-
-    df = pd.DataFrame(records)
-    if df.empty:
-        return None
-
     for column in ["fecha", "nivel_m", "caudal_m3s", "lluvia_mm", "desbordamiento"]:
-        if column not in df.columns:
-            df[column] = 0.0 if column in {"lluvia_mm", "desbordamiento"} else np.nan
+        if column not in daily_df.columns:
+            daily_df[column] = 0.0 if column in {"lluvia_mm", "desbordamiento"} else np.nan
 
-    df["fecha_dt"] = pd.to_datetime(df["fecha"], errors="coerce")
-    df = (
-        df.dropna(subset=["fecha_dt"])
+    daily_df["fecha_dt"] = pd.to_datetime(daily_df["fecha"], errors="coerce")
+    daily_df = (
+        daily_df.dropna(subset=["fecha_dt"])
         .sort_values("fecha_dt")
         .drop_duplicates(subset=["fecha"], keep="last")
         .reset_index(drop=True)
     )
 
-    if len(df) < min_days:
+    if len(daily_df) < min_recent_days:
         return None
 
-    df = _add_model_features(df)
-    df = df.dropna().reset_index(drop=True)
+    raw_df = daily_df[["fecha", "nivel_m", "caudal_m3s", "lluvia_mm", "desbordamiento"]].copy()
+    source = "stored_daily"
+
+    # Al principio de la persistencia puede haber menos de 14 medias recientes.
+    # Se completa la parte antigua de la ventana con el dataset local, manteniendo
+    # como fecha de prediccion el ultimo dia real persistido.
+    if len(raw_df) < min_days and base_df is not None and not base_df.empty:
+        context_rows = max(VENTANA + 4 - len(raw_df), 0)
+        base_context = base_df.copy()
+
+        for column in ["fecha", "nivel_m", "caudal_m3s", "lluvia_mm", "desbordamiento"]:
+            if column not in base_context.columns:
+                base_context[column] = 0.0 if column in {"lluvia_mm", "desbordamiento"} else np.nan
+
+        base_context["fecha_dt"] = pd.to_datetime(base_context["fecha"], errors="coerce")
+        used_dates = set(raw_df["fecha"].astype(str))
+        base_context = (
+            base_context.dropna(subset=["fecha_dt"])
+            .loc[~base_context["fecha"].astype(str).isin(used_dates)]
+            .sort_values("fecha_dt")
+            .tail(context_rows)
+        )
+
+        if not base_context.empty:
+            raw_df = pd.concat(
+                [
+                    base_context[["fecha", "nivel_m", "caudal_m3s", "lluvia_mm", "desbordamiento"]],
+                    raw_df,
+                ],
+                ignore_index=True,
+            )
+            source = "stored_daily_with_dataset_context"
+
+    df = _add_model_features(raw_df).reset_index(drop=True)
 
     if len(df) < VENTANA:
         return None
 
-    df.attrs["prediction_source"] = "stored_daily"
-    df.attrs["prediction_input_last_date"] = str(df["fecha"].iloc[-1])
+    df.attrs["prediction_source"] = source
+    df.attrs["prediction_input_last_date"] = str(daily_df["fecha"].iloc[-1])
     df.attrs["prediction_stale"] = False
-    logger.info("IA %s: usando medias diarias persistidas hasta %s", site_id, df["fecha"].iloc[-1])
+    logger.info(
+        "IA %s: usando ventana %s hasta %s (%s medias persistidas)",
+        site_id,
+        source,
+        daily_df["fecha"].iloc[-1],
+        len(daily_df),
+    )
     _STORED_DAILY_CACHE[site_id] = {"epoch": now, "df": df}
     return df.copy()
 
@@ -279,7 +319,7 @@ def _load_live_prediction_window(
     use_live_saih: bool | None = None,
     allow_stale_fallback: bool | None = None,
 ) -> pd.DataFrame:
-    stored_df = _load_stored_daily_prediction_window(site_id)
+    stored_df = _load_stored_daily_prediction_window(site_id, base_df)
     if stored_df is not None:
         return stored_df
 

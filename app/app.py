@@ -2,6 +2,7 @@ import base64
 from io import BytesIO
 import json
 import logging
+import math
 import os
 import sys
 import unicodedata
@@ -278,6 +279,7 @@ HISTORY_CACHE_SECONDS = env_int("HISTORY_CACHE_SECONDS", 3600)
 HISTORY_CACHE_MAX_ITEMS = env_int("HISTORY_CACHE_MAX_ITEMS", 32)
 HISTORY_CACHE_MAX_BYTES = env_int("HISTORY_CACHE_MAX_BYTES", 10 * 1024 * 1024)
 PREDICTION_EVAL_LOOKBACK_DAYS = env_int("PREDICTION_EVAL_LOOKBACK_DAYS", 7)
+PREDICTION_RELIABILITY_WINDOW_DAYS = env_int("PREDICTION_RELIABILITY_WINDOW_DAYS", 7)
 RELIABILITY_CACHE_SECONDS = env_int("RELIABILITY_CACHE_SECONDS", 3600)
 PREDICTION_RELIABILITY_PRECACHE = env_bool("PREDICTION_RELIABILITY_PRECACHE", True)
 PREDICTION_BACKFILL_FROM_FORECAST = env_bool("PREDICTION_BACKFILL_FROM_FORECAST", True)
@@ -1116,8 +1118,67 @@ def _prediction_point_in_eval_window(point: dict[str, Any]) -> bool:
         return False
 
     today = _today_madrid()
-    min_date = today - timedelta(days=max(1, PREDICTION_EVAL_LOOKBACK_DAYS))
+    min_date = today - timedelta(days=max(1, PREDICTION_RELIABILITY_WINDOW_DAYS))
     return min_date <= target_date <= today
+
+
+def _metrics_for_reliability_points(points: list[dict[str, Any]]) -> dict[str, Any]:
+    nivel_errors = []
+    caudal_errors = []
+    last_validation_date = None
+
+    for point in points:
+        if not isinstance(point, dict):
+            continue
+
+        point_date = point.get("target_date") or point.get("date")
+        if point_date and (last_validation_date is None or str(point_date) > str(last_validation_date)):
+            last_validation_date = point_date
+
+        nivel_real = _number_or_none(point.get("nivel_real"))
+        nivel_pred = _number_or_none(point.get("nivel_pred"))
+        if nivel_real is not None and nivel_pred is not None:
+            nivel_errors.append(abs(nivel_real - nivel_pred))
+
+        caudal_real = _number_or_none(point.get("caudal_real"))
+        caudal_pred = _number_or_none(point.get("caudal_pred"))
+        if caudal_real is not None and caudal_pred is not None:
+            caudal_errors.append(abs(caudal_real - caudal_pred))
+
+    def _mae(values: list[float]) -> Optional[float]:
+        return round(sum(values) / len(values), 3) if values else None
+
+    def _rmse(values: list[float]) -> Optional[float]:
+        return round(math.sqrt(sum(value * value for value in values) / len(values)), 3) if values else None
+
+    return {
+        "nivel_mae": _mae(nivel_errors),
+        "caudal_mae": _mae(caudal_errors),
+        "nivel_rmse": _rmse(nivel_errors),
+        "caudal_rmse": _rmse(caudal_errors),
+        "samples": max(len(nivel_errors), len(caudal_errors)),
+        "nivel_samples": len(nivel_errors),
+        "caudal_samples": len(caudal_errors),
+        "last_validation_date": last_validation_date,
+    }
+
+
+def _enforce_reliability_eval_window(result: dict[str, Any]) -> dict[str, Any]:
+    points = [point for point in (result.get("points") or []) if isinstance(point, dict)]
+    filtered_points = [point for point in points if _prediction_point_in_eval_window(point)]
+    removed = len(points) - len(filtered_points)
+
+    if not removed:
+        return result
+
+    clean = dict(result)
+    clean["points"] = filtered_points
+    clean["metrics"] = _metrics_for_reliability_points(filtered_points)
+    clean["total"] = len(filtered_points)
+    clean["stored_points"] = len(filtered_points)
+    clean["pending"] = 0
+    clean["filtered_out_of_window"] = int(clean.get("filtered_out_of_window") or 0) + removed
+    return clean
 
 
 def _stored_saih(site_id: str) -> Dict[str, Any]:
@@ -1204,8 +1265,9 @@ async def _prediction_reliability_payload(site_id: str, use_cache: bool = True) 
     current_result = await asyncio.to_thread(
         prediction_store.evaluation,
         site_id,
-        PREDICTION_EVAL_LOOKBACK_DAYS,
+        PREDICTION_RELIABILITY_WINDOW_DAYS,
     )
+    current_result = _enforce_reliability_eval_window(current_result)
     update_result = await refresh_prediction_actuals_for_site(
         site_id,
         force=not bool(current_result.get("points")),
@@ -1213,8 +1275,9 @@ async def _prediction_reliability_payload(site_id: str, use_cache: bool = True) 
     result = await asyncio.to_thread(
         prediction_store.evaluation,
         site_id,
-        PREDICTION_EVAL_LOOKBACK_DAYS,
+        PREDICTION_RELIABILITY_WINDOW_DAYS,
     )
+    result = _enforce_reliability_eval_window(result)
     result["generated_at"] = datetime.now().isoformat(timespec="seconds")
     result["storage_backend"] = getattr(prediction_store, "storage_backend", "json")
     result["update"] = update_result
@@ -1921,7 +1984,7 @@ def _prediction_interval_public_cache(site_id: str) -> dict[str, Any]:
 
     if not metrics:
         try:
-            result = prediction_store.evaluation(site_id, PREDICTION_EVAL_LOOKBACK_DAYS)
+            result = prediction_store.evaluation(site_id, PREDICTION_RELIABILITY_WINDOW_DAYS)
             metrics = result.get("metrics") or {}
         except Exception as e:
             logger.exception("PREDICTION INTERVAL LOAD ERROR site_id=%s error=%r", site_id, e)
@@ -2637,7 +2700,7 @@ async def close_daily_actuals_for_site(site_id: str, run_date: date) -> dict[str
 
 
 async def save_daily_d1_prediction_for_site(site_id: str, run_date: date) -> dict[str, Any]:
-    """Guarda la prediccion cuyo target es el dia siguiente del calendario local."""
+    """Guarda el primer dia objetivo vigente devuelto por el modelo."""
     run_key = f"{run_date.isoformat()}:{site_id}"
 
     if run_key in daily_prediction_dates_run:
