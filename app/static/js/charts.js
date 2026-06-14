@@ -534,10 +534,17 @@ function setConn(isUp) {
 
       if (!points.length) {
         const update = data?.update || {};
+        const backfill = data?.reliability_backfill || {};
         let message = "Aun no hay predicciones D+1 guardadas para comparar. Se guardaran automaticamente cada dia.";
 
         if (data?.error) {
           message = `No hay validacion disponible: ${data.error}`;
+        } else if (backfill.error) {
+          message = "No se ha podido generar la comparativa retrospectiva con el modelo. Se reintentara automaticamente.";
+        } else if (backfill.reason === "no_recent_daily_actuals") {
+          message = "Aun no hay medias reales diarias recientes suficientes para generar la comparativa.";
+        } else if (backfill.checked && backfill.candidate_dates > 0 && !backfill.stored) {
+          message = "Hay medias reales recientes, pero todavia no existe una secuencia D+1 suficiente para validar el modelo.";
         } else if (update.error) {
           message = "No se han podido leer las medias diarias guardadas para completar la comparativa. Se reintentara automaticamente.";
         } else if (update.actual_backfill?.error) {

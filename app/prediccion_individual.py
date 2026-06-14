@@ -449,6 +449,110 @@ def _prediction_target_date(input_last_date: str | None, offset_days: int) -> st
         return None
 
 
+def predecir_d1_historica_municipio(site_id: str, target_date: str | date):
+    """Predice un dia pasado usando la ventana disponible hasta el dia anterior."""
+    target = pd.to_datetime(target_date, errors="coerce")
+    if pd.isna(target):
+        return None
+    target_day = target.date()
+    previous_day = target_day - timedelta(days=1)
+
+    artifacts = _load_prediction_artifacts(site_id)
+    if artifacts is None:
+        return None
+
+    base_df = _load_site_dataset(site_id)
+    if base_df is None:
+        return None
+
+    try:
+        store = _get_prediction_store()
+        records = store.recent_daily_actuals(site_id, STORED_DAILY_LOOKBACK_DAYS)
+    except Exception as exc:
+        logger.warning("IA %s: no se pudieron leer medias para backfill historico: %s", site_id, exc)
+        return None
+
+    if not records:
+        return None
+
+    daily_df = pd.DataFrame(records)
+    if daily_df.empty or "fecha" not in daily_df.columns:
+        return None
+
+    for column in ["nivel_m", "caudal_m3s", "lluvia_mm", "desbordamiento"]:
+        if column not in daily_df.columns:
+            daily_df[column] = 0.0 if column in {"lluvia_mm", "desbordamiento"} else np.nan
+
+    daily_df["fecha_dt"] = pd.to_datetime(daily_df["fecha"], errors="coerce")
+    daily_df = (
+        daily_df.dropna(subset=["fecha_dt"])
+        .sort_values("fecha_dt")
+        .drop_duplicates(subset=["fecha"], keep="last")
+        .reset_index(drop=True)
+    )
+    daily_df["fecha_date"] = daily_df["fecha_dt"].dt.date
+
+    if previous_day not in set(daily_df["fecha_date"]):
+        return None
+
+    observed_df = daily_df[daily_df["fecha_date"] < target_day]
+    if observed_df.empty:
+        return None
+
+    last_observed = observed_df["fecha_date"].iloc[-1]
+    if last_observed != previous_day:
+        return None
+
+    min_recent_days = max(1, min(int(STORED_DAILY_MIN_RECENT_DAYS or 1), VENTANA))
+    if len(observed_df) < min_recent_days:
+        return None
+
+    raw_df = observed_df[["fecha", "nivel_m", "caudal_m3s", "lluvia_mm", "desbordamiento"]].copy()
+
+    context_rows = max(VENTANA + 4 - len(raw_df), 0)
+    if context_rows > 0:
+        base_context = base_df.copy()
+
+        for column in ["fecha", "nivel_m", "caudal_m3s", "lluvia_mm", "desbordamiento"]:
+            if column not in base_context.columns:
+                base_context[column] = 0.0 if column in {"lluvia_mm", "desbordamiento"} else np.nan
+
+        base_context["fecha_dt"] = pd.to_datetime(base_context["fecha"], errors="coerce")
+        used_dates = set(raw_df["fecha"].astype(str))
+        base_context = (
+            base_context.dropna(subset=["fecha_dt"])
+            .loc[~base_context["fecha"].astype(str).isin(used_dates)]
+            .loc[base_context["fecha_dt"].dt.date < target_day]
+            .sort_values("fecha_dt")
+            .tail(context_rows)
+        )
+
+        if not base_context.empty:
+            raw_df = pd.concat(
+                [
+                    base_context[["fecha", "nivel_m", "caudal_m3s", "lluvia_mm", "desbordamiento"]],
+                    raw_df,
+                ],
+                ignore_index=True,
+            )
+
+    window_df = _add_model_features(raw_df).reset_index(drop=True)
+    if len(window_df) < VENTANA:
+        return None
+
+    input_last_date = str(previous_day)
+    pred_nivel, pred_caudal = _predict_from_window(artifacts, window_df)
+
+    return {
+        "nivel": float(pred_nivel[0]),
+        "caudal": float(pred_caudal[0]),
+        "target_date": target_day.isoformat(),
+        "issued_at": f"{previous_day.isoformat()}T23:55:00",
+        "source": "historical_d1_backfill",
+        "input_last_date": input_last_date,
+    }
+
+
 def predecir_semana_municipio_detallada(
     site_id: str,
     use_live_saih: bool | None = None,

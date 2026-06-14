@@ -98,7 +98,7 @@ try:
         extract_rain_forecast_mm,
         extract_prob_precip_summary,
     )
-    from app.prediccion_individual import predecir_semana_municipio_detallada
+    from app.prediccion_individual import predecir_d1_historica_municipio, predecir_semana_municipio_detallada
     from app.prediction_store import create_prediction_store
     from app.core.config import SITES, collect_all_tags
     from app import alertas
@@ -110,7 +110,7 @@ except ImportError:
         extract_rain_forecast_mm,
         extract_prob_precip_summary,
     )
-    from app.prediccion_individual import predecir_semana_municipio_detallada
+    from app.prediccion_individual import predecir_d1_historica_municipio, predecir_semana_municipio_detallada
     from app.prediction_store import create_prediction_store
     from app.core.config import SITES, collect_all_tags
     from app import alertas
@@ -280,6 +280,8 @@ HISTORY_CACHE_MAX_ITEMS = env_int("HISTORY_CACHE_MAX_ITEMS", 32)
 HISTORY_CACHE_MAX_BYTES = env_int("HISTORY_CACHE_MAX_BYTES", 10 * 1024 * 1024)
 PREDICTION_EVAL_LOOKBACK_DAYS = env_int("PREDICTION_EVAL_LOOKBACK_DAYS", 7)
 PREDICTION_RELIABILITY_WINDOW_DAYS = env_int("PREDICTION_RELIABILITY_WINDOW_DAYS", 7)
+PREDICTION_RELIABILITY_BACKFILL_ENABLED = env_bool("PREDICTION_RELIABILITY_BACKFILL_ENABLED", True)
+PREDICTION_RELIABILITY_BACKFILL_MAX_DAYS = env_int("PREDICTION_RELIABILITY_BACKFILL_MAX_DAYS", 7)
 RELIABILITY_CACHE_SECONDS = env_int("RELIABILITY_CACHE_SECONDS", 3600)
 PREDICTION_RELIABILITY_PRECACHE = env_bool("PREDICTION_RELIABILITY_PRECACHE", True)
 PREDICTION_BACKFILL_FROM_FORECAST = env_bool("PREDICTION_BACKFILL_FROM_FORECAST", True)
@@ -1181,6 +1183,101 @@ def _enforce_reliability_eval_window(result: dict[str, Any]) -> dict[str, Any]:
     return clean
 
 
+async def _backfill_recent_reliability_predictions(site_id: str) -> dict[str, Any]:
+    if not PREDICTION_RELIABILITY_BACKFILL_ENABLED:
+        return {"checked": False, "stored": 0, "reason": "reliability_backfill_disabled"}
+
+    site = SITES_BY_ID.get(site_id)
+    if not site:
+        return {"checked": False, "stored": 0, "error": "site_not_found"}
+
+    today = _today_madrid()
+    max_target_date = today - timedelta(days=1)
+    min_target_date = today - timedelta(days=max(1, PREDICTION_RELIABILITY_WINDOW_DAYS))
+
+    try:
+        daily_records = await asyncio.to_thread(
+            prediction_store.recent_daily_actuals,
+            site_id,
+            max(PREDICTION_RELIABILITY_WINDOW_DAYS + 14, 30),
+        )
+    except Exception as e:
+        logger.exception("PREDICTION RELIABILITY BACKFILL ACTUALS ERROR site_id=%s error=%r", site_id, e)
+        return {"checked": False, "stored": 0, "error": str(e)}
+
+    actuals_by_date: dict[str, dict[str, Any]] = {}
+    for record in daily_records or []:
+        try:
+            day = date.fromisoformat(str(record.get("fecha") or "")[:10])
+        except ValueError:
+            continue
+
+        if min_target_date <= day <= max_target_date:
+            actuals_by_date[day.isoformat()] = {
+                "nivel_m": record.get("nivel_m"),
+                "caudal_m3s": record.get("caudal_m3s"),
+                "observed_at": day.isoformat(),
+                "source": "stored_daily_actuals",
+            }
+
+    if not actuals_by_date:
+        return {"checked": True, "stored": 0, "reason": "no_recent_daily_actuals"}
+
+    stored = 0
+    attempted = 0
+    skipped_without_previous = 0
+    errors: list[str] = []
+    candidate_dates = sorted(date.fromisoformat(day) for day in actuals_by_date)
+    max_days = max(1, PREDICTION_RELIABILITY_BACKFILL_MAX_DAYS)
+
+    for target_day in candidate_dates[-max_days:]:
+        previous_day = target_day - timedelta(days=1)
+        if previous_day.isoformat() not in actuals_by_date:
+            skipped_without_previous += 1
+            continue
+
+        attempted += 1
+        try:
+            prediction = await asyncio.to_thread(
+                predecir_d1_historica_municipio,
+                site_id,
+                target_day,
+            )
+        except Exception as e:
+            logger.exception("PREDICTION RELIABILITY BACKFILL MODEL ERROR site_id=%s date=%s error=%r", site_id, target_day, e)
+            errors.append(f"{target_day.isoformat()}: {e}")
+            continue
+
+        if not prediction:
+            continue
+
+        issued_at = str(prediction.get("issued_at") or f"{previous_day.isoformat()}T23:55:00")
+        stored += await asyncio.to_thread(
+            prediction_store.store_prediction,
+            site,
+            [prediction],
+            issued_at,
+        )
+        await asyncio.to_thread(
+            prediction_store.update_actuals,
+            site_id,
+            {target_day.isoformat(): actuals_by_date[target_day.isoformat()]},
+        )
+
+    if stored:
+        ia_reliability_cache_by_site.pop(site_id, None)
+
+    return {
+        "checked": True,
+        "stored": stored,
+        "attempted": attempted,
+        "candidate_dates": len(candidate_dates),
+        "skipped_without_previous": skipped_without_previous,
+        "errors": errors[:3],
+        "source": "historical_d1_backfill",
+    }
+
+
 def _stored_saih(site_id: str) -> Dict[str, Any]:
     try:
         actual = prediction_store.latest_actual(site_id)
@@ -1272,6 +1369,11 @@ async def _prediction_reliability_payload(site_id: str, use_cache: bool = True) 
         site_id,
         force=not bool(current_result.get("points")),
     )
+
+    reliability_backfill = None
+    if not current_result.get("points"):
+        reliability_backfill = await _backfill_recent_reliability_predictions(site_id)
+
     result = await asyncio.to_thread(
         prediction_store.evaluation,
         site_id,
@@ -1281,6 +1383,8 @@ async def _prediction_reliability_payload(site_id: str, use_cache: bool = True) 
     result["generated_at"] = datetime.now().isoformat(timespec="seconds")
     result["storage_backend"] = getattr(prediction_store, "storage_backend", "json")
     result["update"] = update_result
+    if reliability_backfill is not None:
+        result["reliability_backfill"] = reliability_backfill
 
     payload = {"ok": True, "site_id": site_id, **result, "cache": "fresh"}
     _prediction_reliability_cache_set(site_id, payload)

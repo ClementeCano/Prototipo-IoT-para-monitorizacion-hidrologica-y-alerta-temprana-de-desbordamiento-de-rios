@@ -1,31 +1,52 @@
-# flyctl launch added from .gitignore
-**\.env
-**/.env
-**/.env.*
+# Entornos locales
+env/
+env311/
+.venv/
+venv/
+
+# Git/editor/cache
+.git/
+.github/
+.vscode/
+.idea/
+__pycache__/
+**/__pycache__/
+*.py[cod]
+*.pyo
+*.pyd
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+
+# Secretos y estado local
+.env
+.env.*
+firebase-key.json
 **/firebase-key.json
+tokens.json
 **/tokens.json
-**\__pycache__
-**/__pycache__
-**\*.pyc
-**/*.pyc
-**\*.pyo
-**/*.pyo
-**\.gitignore
-.git
-.vscode
+users.json
+**/users.json
+predictions.json
+**/predictions.json
 
-# flyctl launch added from env\.gitignore
-# Created by venv; see https://docs.python.org/3/library/venv.html
-env\**\*
+# Salidas locales y logs
+*.log
+*.out
+*.err
+tmp_*
+.codex_*
+uvicorn-*.log
 
-# flyctl launch added from env\Lib\site-packages\debugpy\_vendored\pydevd\_pydevd_frame_eval\.gitignore
-env\Lib\site-packages\debugpy\_vendored\pydevd\_pydevd_frame_eval\pydevd_frame_evaluator.*.so
-env\Lib\site-packages\debugpy\_vendored\pydevd\_pydevd_frame_eval\pydevd_frame_evaluator.*.pyd
-env\Lib\site-packages\debugpy\_vendored\pydevd\_pydevd_frame_eval\pydevd_frame_evaluator.pyx
+# Material de desarrollo/memoria que no necesita el runtime
+Diagramas/
+datos_lluvia_aemet/
+*.zip
+*.pdf
+*.docx
+*.pptx
 
-# flyctl launch added from env\Lib\site-packages\debugpy\_vendored\pydevd\pydevd_attach_to_process\linux_and_mac\.gitignore
-env\Lib\site-packages\debugpy\_vendored\pydevd\pydevd_attach_to_process\linux_and_mac\attach_x86.dylib
-env\Lib\site-packages\debugpy\_vendored\pydevd\pydevd_attach_to_process\linux_and_mac\attach_x86_64.dylib
-env\Lib\site-packages\debugpy\_vendored\pydevd\pydevd_attach_to_process\linux_and_mac\attach_linux_x86.o
-env\Lib\site-packages\debugpy\_vendored\pydevd\pydevd_attach_to_process\linux_and_mac\attach_linux_x86_64.o
+# Metadatos locales
+.gitignore
 fly.toml
+runtime.txt
