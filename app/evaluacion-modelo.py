@@ -2,11 +2,15 @@ import os
 os.environ["TF_CPP_MIN_LOG_LEVEL"] = "2"
 os.environ["TF_ENABLE_ONEDNN_OPTS"] = "0"
 
+import sys
 import numpy as np
 import pandas as pd
 import pickle
 
 from pathlib import Path
+
+if __package__ in {None, ""}:
+    sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from sklearn.metrics import (
     mean_absolute_error,
@@ -17,7 +21,12 @@ from sklearn.metrics import (
 )
 
 # from app.umbrales import cargar_umbrales
-from umbrales import cargar_umbrales
+try:
+    from app.model_pipeline import add_model_features
+    from app.umbrales import cargar_umbrales
+except ImportError:
+    from model_pipeline import add_model_features
+    from umbrales import cargar_umbrales
 
 
 # =========================
@@ -126,7 +135,7 @@ def evaluar_municipio(path_csv):
 
     print(f"\n📍 {municipio}")
 
-    df = pd.read_csv(path_csv)
+    df = add_model_features(pd.read_csv(path_csv))
 
     df = df.dropna().reset_index(drop=True)
 

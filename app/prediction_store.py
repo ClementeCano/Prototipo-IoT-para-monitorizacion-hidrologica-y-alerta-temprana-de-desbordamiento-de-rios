@@ -76,6 +76,16 @@ def _parse_prediction_point_date(point: dict[str, Any]) -> Optional[date]:
     return None
 
 
+def _parse_iso_date(value: Any) -> Optional[date]:
+    if not value:
+        return None
+
+    try:
+        return date.fromisoformat(str(value)[:10])
+    except ValueError:
+        return None
+
+
 def _parse_datetime(value: Any) -> Optional[datetime]:
     if isinstance(value, datetime):
         return value.replace(tzinfo=None)
@@ -157,7 +167,7 @@ def _prediction_rows(site: dict[str, Any], predictions: list[dict[str, Any]], is
     desired_target_date = issued_date + timedelta(days=1)
     rows = []
 
-    for point in predictions or []:
+    for index, point in enumerate(predictions or []):
         if not isinstance(point, dict):
             continue
 
@@ -168,6 +178,12 @@ def _prediction_rows(site: dict[str, Any], predictions: list[dict[str, Any]], is
             continue
 
         point_target = _parse_prediction_point_date(point)
+        target_source = "prediction_point_date"
+
+        if point_target is None and index == 0:
+            point_target = desired_target_date
+            target_source = "issued_date_plus_horizon"
+
         if point_target is None or point_target != desired_target_date:
             continue
 
@@ -191,7 +207,7 @@ def _prediction_rows(site: dict[str, Any], predictions: list[dict[str, Any]], is
             "updatedAt": now,
             "source": "model",
             "metadata": {
-                "targetDateSource": "prediction_point_date",
+                "targetDateSource": target_source,
                 "predictionPointTargetDate": target_date.isoformat(),
             },
         })
@@ -257,7 +273,20 @@ def _public_point(record: dict[str, Any]) -> dict[str, Any]:
 
 def _is_trusted_prediction_point(point: dict[str, Any]) -> bool:
     metadata = point.get("metadata") or {}
-    return metadata.get("targetDateSource") == "prediction_point_date"
+    if metadata.get("targetDateSource") in {"prediction_point_date", "issued_date_plus_horizon"}:
+        return True
+
+    target_date = _parse_prediction_point_date(point)
+    issued_date = _parse_iso_date(point.get("issued_date") or point.get("issuedDate"))
+    horizon_day = int(point.get("horizon_day") or point.get("horizonDay") or 0)
+
+    return bool(
+        target_date is not None
+        and issued_date is not None
+        and horizon_day == 1
+        and target_date == issued_date + timedelta(days=1)
+    )
+
 
 
 def _prediction_value_key(point: dict[str, Any]) -> Optional[tuple[Optional[float], Optional[float]]]:
@@ -1015,7 +1044,8 @@ class PostgresPredictionStore:
                             nivel_pred = EXCLUDED.nivel_pred,
                             caudal_pred = EXCLUDED.caudal_pred,
                             updated_at = EXCLUDED.updated_at,
-                            source = EXCLUDED.source
+                            source = EXCLUDED.source,
+                            metadata = EXCLUDED.metadata
                         """,
                         (
                             row["id"],

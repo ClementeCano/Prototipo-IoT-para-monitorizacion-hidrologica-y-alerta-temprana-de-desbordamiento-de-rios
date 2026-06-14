@@ -286,6 +286,9 @@ PREDICTION_EVAL_INCLUDE_TODAY = env_bool("PREDICTION_EVAL_INCLUDE_TODAY", False)
 PREDICTION_EVAL_MIN_REFRESH_SECONDS = env_int("PREDICTION_EVAL_MIN_REFRESH_SECONDS", 600)
 PREDICTION_ACTUAL_BACKFILL_FROM_SAIH = env_bool("PREDICTION_ACTUAL_BACKFILL_FROM_SAIH", True)
 PREDICTION_ACTUAL_BACKFILL_MAX_DAYS = env_int("PREDICTION_ACTUAL_BACKFILL_MAX_DAYS", 7)
+PREDICTION_ACTUAL_BACKFILL_REQUEST_DELAY_SECONDS = env_float("PREDICTION_ACTUAL_BACKFILL_REQUEST_DELAY_SECONDS", 2)
+PREDICTION_ACTUAL_BACKFILL_RATE_LIMIT_SLEEP_SECONDS = env_float("PREDICTION_ACTUAL_BACKFILL_RATE_LIMIT_SLEEP_SECONDS", 20)
+PREDICTION_ACTUAL_BACKFILL_RATE_LIMIT_ABORT_SECONDS = env_float("PREDICTION_ACTUAL_BACKFILL_RATE_LIMIT_ABORT_SECONDS", 600)
 PREDICTION_DAILY_REFRESH_ENABLED = env_bool("PREDICTION_DAILY_REFRESH_ENABLED", True)
 PREDICTION_DAILY_REFRESH_HOUR = env_int("PREDICTION_DAILY_REFRESH_HOUR", 6)
 PREDICTION_DAILY_REFRESH_MINUTE = env_int("PREDICTION_DAILY_REFRESH_MINUTE", 0)
@@ -626,9 +629,12 @@ async def _backfill_daily_actuals_from_saih(site: dict[str, Any], dates: list[da
             tags,
             start_date,
             end_date,
-            (4, 12),
-            1,
-            max_seconds,
+            request_timeout=(4, 12),
+            request_attempts=1,
+            max_seconds=max_seconds,
+            request_delay_seconds=PREDICTION_ACTUAL_BACKFILL_REQUEST_DELAY_SECONDS,
+            rate_limit_sleep_seconds=PREDICTION_ACTUAL_BACKFILL_RATE_LIMIT_SLEEP_SECONDS,
+            rate_limit_abort_threshold_seconds=PREDICTION_ACTUAL_BACKFILL_RATE_LIMIT_ABORT_SECONDS,
         )
         actuals = _daily_actuals_from_records(site, records)
         wanted = {day.isoformat() for day in unique_dates}
@@ -820,11 +826,12 @@ async def refresh_prediction_actuals_for_site(site_id: str, force: bool = False)
     if not site:
         return {"checked": False, "error": "site_not_found"}
 
-    prediction_backfill = await ensure_prediction_point_from_latest_forecast(site_id)
-    aggregate_result = await aggregate_stored_actuals()
-
     today = _today_madrid()
-    max_date = today - timedelta(days=1)
+    max_completed_date = today - timedelta(days=1)
+    max_date = today if PREDICTION_EVAL_INCLUDE_TODAY else max_completed_date
+
+    prediction_backfill = await ensure_prediction_point_from_latest_forecast(site_id)
+    aggregate_result = await aggregate_stored_actuals(max_date)
     refresh_date = None
     pending_dates = await asyncio.to_thread(
         prediction_store.pending_actual_dates,
@@ -875,12 +882,17 @@ async def refresh_prediction_actuals_for_site(site_id: str, force: bool = False)
             for day in pending_dates
             if day.isoformat() not in actuals
         ]
+        saih_missing_dates = [
+            day
+            for day in missing_dates
+            if day <= max_completed_date
+        ]
         actual_backfill = (
-            await _backfill_daily_actuals_from_saih(site, missing_dates)
-            if missing_dates
+            await _backfill_daily_actuals_from_saih(site, saih_missing_dates)
+            if saih_missing_dates
             else {"checked": False, "stored": 0, "reason": "no_missing_dates"}
         )
-        if missing_dates and actual_backfill.get("stored"):
+        if saih_missing_dates and actual_backfill.get("stored"):
             actuals = await asyncio.to_thread(
                 prediction_store.daily_actuals_by_date,
                 site_id,
@@ -957,6 +969,7 @@ ia_epoch_by_site: Dict[str, float] = {}
 ia_reliability_cache_by_site: Dict[str, Dict[str, Any]] = {}
 history_download_cache: Dict[str, Dict[str, Any]] = {}
 daily_prediction_dates_run: set[str] = set()
+daily_actual_dates_run: set[str] = set()
 prediction_actual_refresh_epoch_by_site: Dict[str, float] = {}
 
 def _default_ia(store_checked: bool = False) -> Dict[str, Any]:
@@ -2314,11 +2327,11 @@ def _update_saih_cache_for_site(
             logger.exception("SAIH ACTUAL STORE ERROR site_id=%s error=%r", sid, e)
 
 
-async def aggregate_stored_actuals() -> int:
+async def aggregate_stored_actuals(up_to_date: Optional[date] = None) -> int:
     try:
         return await asyncio.to_thread(
             prediction_store.aggregate_daily_actuals,
-            _today_madrid() - timedelta(days=1),
+            up_to_date or (_today_madrid() - timedelta(days=1)),
             SAIH_ACTUAL_SAMPLE_RETENTION_DAYS,
         )
     except Exception as e:
@@ -2527,6 +2540,66 @@ async def poll_prediction_evaluation_loop():
         await asyncio.sleep(PREDICTION_EVAL_CHECK_SECONDS)
 
 
+async def close_daily_actuals_for_site(site_id: str, run_date: date) -> dict[str, Any]:
+    """Completa valores reales de los dias ya cerrados para la comparativa."""
+    run_key = f"{run_date.isoformat()}:{site_id}"
+
+    if run_key in daily_actual_dates_run:
+        return {"checked": True, "skipped": "already_closed_today"}
+
+    result = await refresh_prediction_actuals_for_site(site_id, force=True)
+    if result.get("checked"):
+        daily_actual_dates_run.add(run_key)
+
+    return result
+
+
+async def save_daily_d1_prediction_for_site(site_id: str, run_date: date) -> dict[str, Any]:
+    """Guarda la prediccion cuyo target es el dia siguiente del calendario local."""
+    run_key = f"{run_date.isoformat()}:{site_id}"
+
+    if run_key in daily_prediction_dates_run:
+        return {"checked": True, "stored": 0, "skipped": "already_saved_today"}
+
+    await refresh_ia_for_site(
+        site_id,
+        force=True,
+        store_evaluation=True,
+        use_live_saih=None,
+        allow_stale_fallback=False,
+    )
+    state = ia_cache_by_site.get(site_id, {})
+    stored = int(state.get("pred_semana_persistida") or 0)
+    forecast_backfill = await ensure_prediction_point_from_latest_forecast(site_id)
+    stored += int(forecast_backfill.get("stored") or 0)
+
+    if stored:
+        daily_prediction_dates_run.add(run_key)
+        ia_reliability_cache_by_site.pop(site_id, None)
+
+    return {
+        "checked": True,
+        "stored": stored,
+        "forecast_backfill": forecast_backfill,
+        "prediction_source": state.get("pred_semana_source"),
+        "input_last_date": state.get("pred_semana_input_last_date"),
+        "stale": bool(state.get("pred_semana_stale")),
+    }
+
+
+async def run_daily_prediction_maintenance_for_site(site: dict[str, Any], run_date: date) -> dict[str, Any]:
+    site_id = site["id"]
+
+    actuals_result = await close_daily_actuals_for_site(site_id, run_date)
+    prediction_result = await save_daily_d1_prediction_for_site(site_id, run_date)
+
+    return {
+        "site_id": site_id,
+        "actuals": actuals_result,
+        "prediction": prediction_result,
+    }
+
+
 async def poll_daily_prediction_loop():
     while True:
         try:
@@ -2544,33 +2617,26 @@ async def poll_daily_prediction_loop():
             )
 
             if now >= scheduled:
-                logger.info("PREDICTION DAILY: guardando predicciones D+1 para %s", today_key)
+                logger.info("PREDICTION DAILY: cerrando medias y guardando predicciones D+1 para %s", today_key)
 
-                await aggregate_stored_actuals()
+                daily_actual_up_to = now.date() if PREDICTION_EVAL_INCLUDE_TODAY else (now.date() - timedelta(days=1))
+                await aggregate_stored_actuals(daily_actual_up_to)
 
                 for site in SITES:
-                    run_key = f"{today_key}:{site['id']}"
-                    if run_key in daily_prediction_dates_run:
-                        continue
+                    result = await run_daily_prediction_maintenance_for_site(site, now.date())
+                    prediction_result = result.get("prediction") or {}
 
-                    await refresh_ia_for_site(
-                        site["id"],
-                        force=True,
-                        store_evaluation=True,
-                        use_live_saih=None,
-                        allow_stale_fallback=False,
-                    )
-                    state = ia_cache_by_site.get(site["id"], {})
-                    stored = int(state.get("pred_semana_persistida") or 0)
-                    forecast_backfill = await ensure_prediction_point_from_latest_forecast(site["id"])
-                    stored += int(forecast_backfill.get("stored") or 0)
-
-                    if stored:
-                        daily_prediction_dates_run.add(run_key)
-                    else:
+                    if not prediction_result.get("stored") and prediction_result.get("skipped") != "already_saved_today":
                         logger.warning(
                             "PREDICTION DAILY: no se pudo guardar D+1 site_id=%s; se reintentara",
                             site["id"],
+                        )
+                    else:
+                        logger.info(
+                            "PREDICTION DAILY: site_id=%s actuals=%s prediction=%s",
+                            site["id"],
+                            result.get("actuals"),
+                            prediction_result,
                         )
 
                     await asyncio.sleep(0.5)

@@ -16,11 +16,13 @@ try:
     from app.core.config import SITES
     from app.env_utils import env_bool, env_float, env_int
     from app.logging_config import configure_logging
+    from app.model_pipeline import add_model_features
 except ImportError:
     from api.saih_opendata import fetch_saih_history
     from core.config import SITES
     from env_utils import env_bool, env_float, env_int
     from logging_config import configure_logging
+    from model_pipeline import add_model_features
 
 configure_logging()
 logger = logging.getLogger(__name__)
@@ -100,34 +102,13 @@ def _load_site_dataset(site_id: str):
         logger.warning("Dataset no encontrado para site_id=%s", site_id)
         return None
 
-    df = pd.read_csv(dataset_path).dropna().reset_index(drop=True)
+    df = pd.read_csv(dataset_path).reset_index(drop=True)
     _DATASET_CACHE[site_id] = df
     return df.copy()
 
 
 def _add_model_features(df: pd.DataFrame) -> pd.DataFrame:
-    df = df.copy()
-    df["nivel_m"] = pd.to_numeric(df.get("nivel_m"), errors="coerce")
-    df["caudal_m3s"] = pd.to_numeric(df.get("caudal_m3s"), errors="coerce")
-    df["lluvia_mm"] = (
-        pd.to_numeric(df["lluvia_mm"], errors="coerce").fillna(0)
-        if "lluvia_mm" in df.columns
-        else pd.Series(0.0, index=df.index)
-    )
-    df["desbordamiento"] = (
-        pd.to_numeric(df["desbordamiento"], errors="coerce").fillna(0)
-        if "desbordamiento" in df.columns
-        else pd.Series(0, index=df.index)
-    )
-    df["caudal_log"] = np.log1p(df["caudal_m3s"].clip(lower=0))
-    df["nivel_lag1"] = df["nivel_m"].shift(1)
-    df["caudal_lag1"] = df["caudal_log"].shift(1)
-    df["lluvia_3d"] = df["lluvia_mm"].rolling(3, min_periods=1).sum()
-    df["lluvia_7d"] = df["lluvia_mm"].rolling(7, min_periods=1).sum()
-    df["nivel_diff"] = df["nivel_m"].diff()
-    df["caudal_diff"] = df["caudal_m3s"].diff()
-    df["nivel_media_3"] = df["nivel_m"].rolling(3, min_periods=1).mean()
-    return df
+    return add_model_features(df)
 
 
 def _records_to_daily_dataset(site_id: str, records: list[dict]) -> pd.DataFrame:
@@ -517,6 +498,9 @@ def evaluar_fiabilidad_municipio(site_id: str):
         required = {"nivel_m", "caudal_m3s"}
         if not required.issubset(df.columns):
             return {"points": [], "metrics": {}, "error": "dataset_missing_columns"}
+
+        df = _add_model_features(df)
+        df = df.dropna().reset_index(drop=True)
 
         if len(df) < VENTANA + HORIZONTE:
             return {"points": [], "metrics": {}, "error": "not_enough_data"}

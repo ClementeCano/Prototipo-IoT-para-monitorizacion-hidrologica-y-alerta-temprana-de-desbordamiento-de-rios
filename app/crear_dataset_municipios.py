@@ -1,6 +1,15 @@
 from pathlib import Path
+import sys
+
+if __package__ in {None, ""}:
+    sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+
 import pandas as pd
-import numpy as np
+
+try:
+    from app.model_pipeline import add_model_features
+except ImportError:
+    from model_pipeline import add_model_features
 
 # =========================
 # RUTAS
@@ -51,21 +60,7 @@ def limpiar_dataset(path_excel: Path) -> pd.DataFrame:
     # Desbordamiento vacío = 0
     df["desbordamiento"] = df["desbordamiento"].fillna(0).astype(int)
 
-    # =========================
-    # FEATURES PARA EL MODELO
-    # =========================
-    df["caudal_log"] = np.log1p(df["caudal_m3s"])
-
-    df["nivel_lag1"] = df["nivel_m"].shift(1)
-    df["caudal_lag1"] = df["caudal_log"].shift(1)
-
-    df["lluvia_3d"] = df["lluvia_mm"].rolling(3).sum()
-    df["lluvia_7d"] = df["lluvia_mm"].rolling(7).sum()
-
-    # Quitamos filas iniciales con NaN por lags/rolling
-    df = df.dropna().reset_index(drop=True)
-
-    return df
+    return add_model_features(df)
 
 
 def main():

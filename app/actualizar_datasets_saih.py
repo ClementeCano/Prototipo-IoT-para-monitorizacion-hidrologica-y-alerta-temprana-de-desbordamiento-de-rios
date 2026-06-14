@@ -1,4 +1,5 @@
 import argparse
+import sys
 from datetime import date, timedelta
 from pathlib import Path
 
@@ -6,17 +7,21 @@ import numpy as np
 import pandas as pd
 from dotenv import load_dotenv
 
+if __package__ in {None, ""}:
+    sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+
 try:
     from app.api.saih_opendata import fetch_saih_history
     from app.core.config import SITES
+    from app.model_pipeline import BASE_COLUMNS, add_model_features
 except ImportError:
     from api.saih_opendata import fetch_saih_history
     from core.config import SITES
+    from model_pipeline import BASE_COLUMNS, add_model_features
 
 
 BASE_DIR = Path(__file__).resolve().parent
 DATASET_DIR = BASE_DIR / "datasets_modelo_municipios"
-BASE_COLUMNS = ["fecha", "nivel_m", "caudal_m3s", "lluvia_mm", "desbordamiento"]
 
 
 def _site_map():
@@ -32,30 +37,6 @@ def _last_date(df: pd.DataFrame):
         return None
 
     return dates.max().date()
-
-
-def _add_features(df: pd.DataFrame) -> pd.DataFrame:
-    df = df.copy()
-    df["fecha_dt"] = pd.to_datetime(df["fecha"], errors="coerce")
-    df = df.dropna(subset=["fecha_dt"]).sort_values("fecha_dt")
-
-    for column in ["nivel_m", "caudal_m3s", "lluvia_mm", "desbordamiento"]:
-        if column not in df.columns:
-            df[column] = 0
-        df[column] = pd.to_numeric(df[column], errors="coerce")
-
-    df["lluvia_mm"] = df["lluvia_mm"].fillna(0)
-    df["desbordamiento"] = df["desbordamiento"].fillna(0).astype(int)
-    df = df.dropna(subset=["nivel_m", "caudal_m3s"]).reset_index(drop=True)
-
-    df["fecha"] = df["fecha_dt"].dt.strftime("%Y-%m-%d")
-    df["caudal_log"] = np.log1p(df["caudal_m3s"].clip(lower=0))
-    df["nivel_lag1"] = df["nivel_m"].shift(1)
-    df["caudal_lag1"] = df["caudal_log"].shift(1)
-    df["lluvia_3d"] = df["lluvia_mm"].rolling(3, min_periods=1).sum()
-    df["lluvia_7d"] = df["lluvia_mm"].rolling(7, min_periods=1).sum()
-
-    return df.drop(columns=["fecha_dt"]).dropna().reset_index(drop=True)
 
 
 def _records_to_daily(site: dict, records: list[dict]) -> pd.DataFrame:
@@ -104,7 +85,15 @@ def _records_to_daily(site: dict, records: list[dict]) -> pd.DataFrame:
     return daily[BASE_COLUMNS]
 
 
-def update_site(site: dict, days_back: int, max_seconds: float) -> int:
+def update_site(
+    site: dict,
+    days_back: int,
+    max_seconds: float,
+    request_attempts: int,
+    request_delay: float,
+    rate_limit_sleep: float,
+    rate_limit_abort_threshold: float,
+) -> int:
     site_id = site["id"]
     path = DATASET_DIR / f"{site_id}.csv"
     existing = pd.read_csv(path) if path.exists() else pd.DataFrame(columns=BASE_COLUMNS)
@@ -129,8 +118,11 @@ def update_site(site: dict, days_back: int, max_seconds: float) -> int:
         start_date,
         end_date,
         request_timeout=(3, 10),
-        request_attempts=1,
+        request_attempts=request_attempts,
         max_seconds=max_seconds,
+        request_delay_seconds=request_delay,
+        rate_limit_sleep_seconds=rate_limit_sleep,
+        rate_limit_abort_threshold_seconds=rate_limit_abort_threshold,
     )
     daily = _records_to_daily(site, records)
 
@@ -149,7 +141,7 @@ def update_site(site: dict, days_back: int, max_seconds: float) -> int:
         .sort_values("fecha")
         .reset_index(drop=True)
     )
-    updated = _add_features(combined)
+    updated = add_model_features(combined)
     DATASET_DIR.mkdir(exist_ok=True)
     updated.to_csv(path, index=False, encoding="utf-8-sig")
 
@@ -162,7 +154,16 @@ def main():
     parser = argparse.ArgumentParser(description="Actualiza datasets locales con historico SAIH reciente.")
     parser.add_argument("--site", action="append", help="ID de municipio. Repetible. Por defecto: todos.")
     parser.add_argument("--days", type=int, default=45, help="Dias hacia atras si el CSV esta vacio.")
-    parser.add_argument("--max-seconds", type=float, default=120, help="Tiempo maximo por municipio.")
+    parser.add_argument("--max-seconds", type=float, default=900, help="Tiempo maximo por municipio.")
+    parser.add_argument("--request-attempts", type=int, default=4, help="Reintentos por dia si SAIH limita o falla.")
+    parser.add_argument("--request-delay", type=float, default=2.0, help="Pausa entre dias para evitar 429.")
+    parser.add_argument("--rate-limit-sleep", type=float, default=45.0, help="Espera tras un 429 antes de reintentar.")
+    parser.add_argument(
+        "--rate-limit-abort-threshold",
+        type=float,
+        default=3600.0,
+        help="Si SAIH pide esperar mas segundos que este umbral, no se bloquea el script.",
+    )
     args = parser.parse_args()
 
     sites_by_id = _site_map()
@@ -175,7 +176,15 @@ def main():
             print(f"{site_id}: municipio desconocido")
             continue
         try:
-            total += update_site(site, max(1, args.days), max(1, args.max_seconds))
+            total += update_site(
+                site,
+                max(1, args.days),
+                max(1, args.max_seconds),
+                max(1, args.request_attempts),
+                max(0, args.request_delay),
+                max(1, args.rate_limit_sleep),
+                max(1, args.rate_limit_abort_threshold),
+            )
         except Exception as exc:
             print(f"{site_id}: error actualizando dataset: {exc}")
 

@@ -1,3 +1,5 @@
+# Python runtime recomendado: 3.11
+# Fly usa esta version desde el Dockerfile: python:3.11-slim
 requests==2.32.5
 python-dotenv==1.2.1
 psycopg2-binary==2.9.12
