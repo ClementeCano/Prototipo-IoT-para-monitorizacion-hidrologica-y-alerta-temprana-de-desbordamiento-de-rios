@@ -830,6 +830,8 @@ class JsonPredictionStore:
         limit: int = 14,
         refresh_date: Optional[date] = None,
     ) -> list[date]:
+        min_target_date, _ = _evaluation_date_window(limit)
+
         with self.lock:
             data = self._load_unlocked()
             dates = []
@@ -843,7 +845,7 @@ class JsonPredictionStore:
                     target = date.fromisoformat(str(record.get("targetDate")))
                 except ValueError:
                     continue
-                if target > max_date:
+                if target < min_target_date or target > max_date:
                     continue
                 if refresh_date and target == refresh_date:
                     if target not in dates:
@@ -1382,6 +1384,8 @@ class PostgresPredictionStore:
         limit: int = 14,
         refresh_date: Optional[date] = None,
     ) -> list[date]:
+        min_target_date, _ = _evaluation_date_window(limit)
+
         with self._connection() as conn:
             with conn.cursor() as cur:
                 cur.execute(
@@ -1390,6 +1394,7 @@ class PostgresPredictionStore:
                     FROM prediction_points
                     WHERE site_id = %s
                       AND horizon_day = 1
+                      AND target_date >= %s
                       AND target_date <= %s
                       AND (
                           (nivel_pred IS NOT NULL AND nivel_real IS NULL)
@@ -1399,7 +1404,13 @@ class PostgresPredictionStore:
                     ORDER BY target_date ASC
                     LIMIT %s
                     """,
-                    (site_id, max_date, refresh_date, max(1, min(int(limit or 14), 60))),
+                    (
+                        site_id,
+                        min_target_date,
+                        max_date,
+                        refresh_date,
+                        max(1, min(int(limit or 14), 60)),
+                    ),
                 )
                 return [row[0] for row in cur.fetchall()]
 

@@ -1110,6 +1110,16 @@ def _stored_ia(site_id: str) -> Dict[str, Any]:
     return _default_ia(store_checked=True)
 
 
+def _prediction_point_in_eval_window(point: dict[str, Any]) -> bool:
+    target_date = _date_from_any((point or {}).get("target_date") or (point or {}).get("date"))
+    if not target_date:
+        return False
+
+    today = _today_madrid()
+    min_date = today - timedelta(days=max(1, PREDICTION_EVAL_LOOKBACK_DAYS))
+    return min_date <= target_date <= today
+
+
 def _stored_saih(site_id: str) -> Dict[str, Any]:
     try:
         actual = prediction_store.latest_actual(site_id)
@@ -1165,6 +1175,11 @@ def _prediction_reliability_cache_get(site_id: str) -> Optional[dict[str, Any]]:
         return None
 
     payload = dict(cached.get("payload") or {})
+    points = payload.get("points") or []
+    if any(isinstance(point, dict) and not _prediction_point_in_eval_window(point) for point in points):
+        ia_reliability_cache_by_site.pop(site_id, None)
+        return None
+
     payload["cache"] = "memory"
     payload["cache_age_seconds"] = round(age)
     return payload
@@ -1186,12 +1201,20 @@ async def _prediction_reliability_payload(site_id: str, use_cache: bool = True) 
         if cached:
             return cached
 
-    current_result = await asyncio.to_thread(prediction_store.evaluation, site_id, 30)
+    current_result = await asyncio.to_thread(
+        prediction_store.evaluation,
+        site_id,
+        PREDICTION_EVAL_LOOKBACK_DAYS,
+    )
     update_result = await refresh_prediction_actuals_for_site(
         site_id,
         force=not bool(current_result.get("points")),
     )
-    result = await asyncio.to_thread(prediction_store.evaluation, site_id, 30)
+    result = await asyncio.to_thread(
+        prediction_store.evaluation,
+        site_id,
+        PREDICTION_EVAL_LOOKBACK_DAYS,
+    )
     result["generated_at"] = datetime.now().isoformat(timespec="seconds")
     result["storage_backend"] = getattr(prediction_store, "storage_backend", "json")
     result["update"] = update_result
